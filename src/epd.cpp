@@ -29,10 +29,12 @@ bool Driver::begin() {
   out.intr_type = GPIO_INTR_DISABLE;
   ESP_ERROR_CHECK(gpio_config(&out));
 
+  // working_half leaves BUSY as a plain floating input, so match it exactly
+  // before adding any pull resistor back.
   gpio_config_t in = {};
   in.pin_bit_mask = (1ULL << kPinBusy);
   in.mode = GPIO_MODE_INPUT;
-  in.pull_up_en = GPIO_PULLUP_ENABLE;
+  in.pull_up_en = GPIO_PULLUP_DISABLE;
   in.pull_down_en = GPIO_PULLDOWN_DISABLE;
   in.intr_type = GPIO_INTR_DISABLE;
   ESP_ERROR_CHECK(gpio_config(&in));
@@ -161,62 +163,58 @@ void Driver::power_high_z() {
 }
 
 void Driver::reset_panel() {
-  // Seeed GFX UC8179 wake/reset timing.
+  // The working_half sketch holds RST low for a real 1 ms. vTaskDelay(1) rounds
+  // down to zero ticks at the default 100 Hz tick, so use a microsecond delay:
+  // with a ~0 us pulse the UC8179 never resets and stays stuck asserting BUSY.
   gpio_set_level(kPinRst, 0);
-  delay_ms(10);
+  esp_rom_delay_us(1000);
   gpio_set_level(kPinRst, 1);
-  delay_ms(10);
-  delay_ms(100);
+  delay_ms(200);
   ESP_LOGI(TAG, "panel reset done, BUSY=%d", busy_level());
 }
 
+// Init follows the working_half / reference escreen.h sequence exactly, and
+// deliberately omits TRES (0x61), 0x15, 0x60 and the 0x01/0x06 booster setup.
+// This controller's OTP already describes the 648x480 panel; the extra
+// commands were what kept the panel silent.
 void Driver::init_mode(bool partial) {
-  if (partial) {
-    // Seeed GFX UC8179 EPD_INIT_PARTIAL()
-    send_cmd(0x00);
-    send_data(0x1F);
-    send_cmd(0x04);
-    delay_ms(100);
-    (void)wait_idle(5000, "init-partial");
-    send_cmd(0xE0);
-    send_data(0x02);
-    send_cmd(0xE5);
-    send_data(0x6E);
-  } else {
-    // Seeed GFX UC8179 EPD_INIT_FULL(). The 0x06 booster soft-start is
-    // required by this HAT and is absent from the Good Display sample.
+  if (!partial) {
+    // Drive voltages. The Good Display sample relies on OTP defaults; with
+    // those, solid areas switch but 1-2 px glyph strokes stay grey. These are
+    // Seeed's UC8179 values (VGH=20V, VGL=-20V, VDH=15V, VDL=-15V).
     send_cmd(0x01);
     send_data(0x07);
     send_data(0x07);
     send_data(0x3F);
     send_data(0x3F);
 
-    send_cmd(0x06);
+    send_cmd(0x06); // booster soft start
     send_data(0x17);
     send_data(0x17);
     send_data(0x28);
     send_data(0x17);
+  }
 
-    send_cmd(0x04);
-    delay_ms(100);
-    (void)wait_idle(5000, "init-full");
+  send_cmd(0x00); // panel setting
+  send_data(0x1F);
 
-    send_cmd(0x00);
-    send_data(0x1F);
+  send_cmd(0x04); // power on
+  delay_ms(100);
+  (void)wait_idle(5000, "power on");
 
-    send_cmd(0x61);
-    send_data((kWidth >> 8) & 0xFF);
-    send_data(kWidth & 0xFF);
-    send_data((kHeight >> 8) & 0xFF);
-    send_data(kHeight & 0xFF);
-
-    send_cmd(0x15);
-    send_data(0x00);
+  if (partial) {
     send_cmd(0x50);
-    send_data(0x10);
+    send_data(0x29);
     send_data(0x07);
-    send_cmd(0x60);
-    send_data(0x22);
+    // Partial waveform.
+    send_cmd(0xE0);
+    send_data(0x02);
+    send_cmd(0xE5);
+    send_data(0x58);
+  } else {
+    send_cmd(0x50); // VCOM and data interval
+    send_data(0x21);
+    send_data(0x07);
   }
 
   partial_mode_ = partial;
@@ -244,12 +242,12 @@ void Driver::set_window(int x1_byte, int x2_byte, int y1, int y2) {
   send_data(xs >> 8);
   send_data(xs & 0xFF);
   send_data(xe >> 8);
-  send_data((xe & 0xFF) - 1); // working driver uses an exclusive end
+  send_data(xe & 0xFF);
   send_data(ys >> 8);
   send_data(ys & 0xFF);
   send_data(ye >> 8);
-  send_data((ye & 0xFF) - 1); // working driver uses an exclusive end
-  send_data(0x01);            // PT_SCAN
+  send_data(ye & 0xFF);
+  send_data(0x01); // PT_SCAN
 }
 
 void Driver::write_window(const uint8_t *src, int stride, int x1_byte,
@@ -289,8 +287,15 @@ void Driver::write_fill(uint8_t value, size_t count) {
 }
 
 bool Driver::wait_idle(uint32_t timeout_ms, const char *what) {
+  // Exactly the working_half WaitUntilIdle loop: poll GET_STATUS (0x71), then
+  // sample BUSY. On this HAT the status command is part of what makes the line
+  // observable at all.
   uint32_t waited = 0;
-  while (is_busy()) {
+  while (true) {
+    send_cmd(0x71);
+    if (!is_busy()) {
+      break;
+    }
     if (waited >= timeout_ms) {
       ESP_LOGW(TAG, "%s: BUSY did not release after %u ms", what,
                (unsigned)waited);
@@ -299,6 +304,7 @@ bool Driver::wait_idle(uint32_t timeout_ms, const char *what) {
     delay_ms(10);
     waited += 10;
   }
+  delay_ms(200);
   ESP_LOGI(TAG, "%s: idle (%u ms)", what, (unsigned)waited);
   return true;
 }
@@ -319,19 +325,21 @@ bool Driver::draw_and_refresh(const uint8_t *frame, int x1_byte, int x2_byte,
   return wait_idle(45000, "refresh");
 }
 
-bool Driver::clear(uint8_t color) {
+bool Driver::clear(uint8_t level) {
   if (!wait_idle(30000, "pre-clear")) {
     return false;
   }
 
   init_mode(false);
 
+  // Both planes are loaded so the first partial update starts from a known
+  // image (0x10 = previous, 0x13 = next).
   start_stream(0x10);
-  write_fill(color, kFrameBytes);
+  write_fill(level, kFrameBytes);
   end_stream();
 
   start_stream(0x13);
-  write_fill(static_cast<uint8_t>(~color), kFrameBytes);
+  write_fill(level, kFrameBytes);
   end_stream();
 
   send_cmd(0x12);

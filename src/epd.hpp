@@ -15,17 +15,22 @@ inline constexpr int kStride = kWidth / 8;              // 81 bytes
 inline constexpr size_t kFrameBytes =
     static_cast<size_t>(kStride) * kHeight;             // 38880 bytes
 
-// Wiring (Seeed XIAO ESP32-S3 labels in parentheses).
+// Wiring, matching the working `sample/working_half` sketch (Seeed XIAO
+// ESP32-S3 labels in parentheses). This is the mapping that actually drives
+// the panel; it differs from the earlier bench guess.
 inline constexpr gpio_num_t kPinMosi = GPIO_NUM_9;  // D10
 inline constexpr gpio_num_t kPinSclk = GPIO_NUM_7;  // D8
-inline constexpr gpio_num_t kPinCs = GPIO_NUM_2;    // D1
+inline constexpr gpio_num_t kPinRst = GPIO_NUM_2;   // D1
 inline constexpr gpio_num_t kPinDc = GPIO_NUM_3;    // D2
-inline constexpr gpio_num_t kPinRst = GPIO_NUM_4;   // D3
-inline constexpr gpio_num_t kPinBusy = GPIO_NUM_5;  // D4
-inline constexpr gpio_num_t kPinPwr = GPIO_NUM_6;   // D5
+inline constexpr gpio_num_t kPinCs = GPIO_NUM_4;    // D3
+inline constexpr gpio_num_t kPinPwr = GPIO_NUM_5;   // D4
+inline constexpr gpio_num_t kPinBusy = GPIO_NUM_1;  // D0
 
 inline constexpr spi_host_device_t kSpiHost = SPI2_HOST;
-inline constexpr int kSpiClockHz = 5 * 1000 * 1000;
+// 5 MHz is the panel's rated maximum, and the working_half sketch runs at
+// 2 MHz. Use the proven value: the HAT's level shifter and the dupont wiring
+// are not happy at 5 MHz on this bench.
+inline constexpr int kSpiClockHz = 2 * 1000 * 1000;
 
 struct Rect {
   int x1;
@@ -44,8 +49,9 @@ public:
   // commands during bring-up.
   bool reset_and_init(bool partial);
 
-  // Full-screen clear in full-waveform mode (0x10 and 0x13 both get `color`).
-  bool clear(uint8_t color);
+  // Full-screen fill in full-waveform mode: both RAM planes (0x10 old and
+  // 0x13 new) get `level`, where 0xFF is white and 0x00 is black.
+  bool clear(uint8_t level);
 
   // Full-waveform repaint of `frame`: init full, draw/refresh the whole frame,
   // then return to the partial configuration.

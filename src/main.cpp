@@ -15,6 +15,7 @@
 // printable ASCII (U+0020..U+007E) plus the Danish letters Æ Ø Å æ ø å.
 LV_FONT_DECLARE(cozette_vector_16);
 LV_FONT_DECLARE(cozette_vector_48);
+LV_FONT_DECLARE(cozette_vector_96);
 
 namespace {
 
@@ -101,52 +102,54 @@ void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
 
 void build_ui() {
   lv_obj_t *scr = lv_screen_active();
-  lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
+  lv_obj_set_style_bg_color(scr, lv_color_white(), 0);
   lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
   lv_obj_set_style_pad_all(scr, 0, 0);
   lv_obj_set_style_border_width(scr, 0, 0);
 
   lv_obj_t *title = lv_label_create(scr);
   lv_label_set_text(title, "eink-status");
-  lv_obj_set_style_text_color(title, lv_color_white(), 0);
+  lv_obj_set_style_text_color(title, lv_color_black(), 0);
   lv_obj_set_style_text_font(title, &cozette_vector_16, 0);
   lv_obj_align(title, LV_ALIGN_TOP_LEFT, 16, 12);
 
   g_mode = lv_label_create(scr);
   lv_label_set_text(g_mode, "partial");
-  lv_obj_set_style_text_color(g_mode, lv_color_white(), 0);
+  lv_obj_set_style_text_color(g_mode, lv_color_black(), 0);
   lv_obj_set_style_text_font(g_mode, &cozette_vector_16, 0);
   lv_obj_align(g_mode, LV_ALIGN_TOP_RIGHT, -16, 12);
 
+  // 96 px: the panel's full waveform only fully darkens strokes of ~4 px or
+  // more, and Cozette's 48 px glyphs are drawn with 2 px stems.
   lv_obj_t *success = lv_label_create(scr);
   lv_label_set_text(success, "Success");
-  lv_obj_set_style_text_color(success, lv_color_white(), 0);
-  lv_obj_set_style_text_font(success, &cozette_vector_48, 0);
-  lv_obj_align(success, LV_ALIGN_CENTER, 0, -40);
+  lv_obj_set_style_text_color(success, lv_color_black(), 0);
+  lv_obj_set_style_text_font(success, &cozette_vector_96, 0);
+  lv_obj_align(success, LV_ALIGN_CENTER, 0, -30);
 
   // Small counter kept for the partial-update demo (the "Success" label itself
   // is static).
   g_counter = lv_label_create(scr);
   lv_label_set_text(g_counter, "0000");
-  lv_obj_set_style_text_color(g_counter, lv_color_white(), 0);
+  lv_obj_set_style_text_color(g_counter, lv_color_black(), 0);
   lv_obj_set_style_text_font(g_counter, &cozette_vector_16, 0);
-  lv_obj_align(g_counter, LV_ALIGN_CENTER, 0, 32);
+  lv_obj_align(g_counter, LV_ALIGN_CENTER, 0, 45);
 
   lv_obj_t *subtitle = lv_label_create(scr);
   lv_label_set_text(subtitle, "LVGL 1bpp / GDEY0583T81");
-  lv_obj_set_style_text_color(subtitle, lv_color_white(), 0);
+  lv_obj_set_style_text_color(subtitle, lv_color_black(), 0);
   lv_obj_set_style_text_font(subtitle, &cozette_vector_16, 0);
-  lv_obj_align(subtitle, LV_ALIGN_CENTER, 0, 72);
+  lv_obj_align(subtitle, LV_ALIGN_CENTER, 0, 80);
 
   g_status = lv_label_create(scr);
   lv_label_set_text(g_status, "wifi: starting");
-  lv_obj_set_style_text_color(g_status, lv_color_white(), 0);
+  lv_obj_set_style_text_color(g_status, lv_color_black(), 0);
   lv_obj_set_style_text_font(g_status, &cozette_vector_16, 0);
   lv_obj_align(g_status, LV_ALIGN_BOTTOM_LEFT, 16, -12);
 
   g_tick = lv_obj_create(scr);
   lv_obj_set_size(g_tick, 36, 36);
-  lv_obj_set_style_bg_color(g_tick, lv_color_white(), 0);
+  lv_obj_set_style_bg_color(g_tick, lv_color_black(), 0);
   lv_obj_set_style_bg_opa(g_tick, LV_OPA_COVER, 0);
   lv_obj_set_style_border_width(g_tick, 0, 0);
   lv_obj_set_style_radius(g_tick, 0, 0);
@@ -255,12 +258,12 @@ extern "C" void app_main() {
 
   // Reference DUAL leaves the panel power-enable pin alone (it is the shared
   // slave BUSY input there). Try high-Z first, then output states if needed.
-  ESP_LOGI(TAG, "panel bring-up: PWR high + full init + black clear");
+  ESP_LOGI(TAG, "panel bring-up: PWR high + full init + white clear");
   g_driver.power_output(true);
   vTaskDelay(pdMS_TO_TICKS(300));
   g_driver.reset_and_init(false);
-  if (!g_driver.clear(0x00)) {
-    ESP_LOGE(TAG, "full-mode black clear did not complete");
+  if (!g_driver.clear(0xFF)) {
+    ESP_LOGE(TAG, "full-mode white clear did not complete");
   }
 
   ESP_LOGI(TAG, "LVGL init");
