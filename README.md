@@ -4,16 +4,160 @@ Barebones PlatformIO + ESP-IDF firmware for a single Good Display
 **GDEY0583T81** 5.83" 648 x 480 e-paper panel on a Seeed XIAO ESP32-S3.
 
 - Direct-GPIO EPD driver (no MCP23X17 expander).
-- LVGL 9.5 in 1-bit `I1` mode.
-- Partial (dirty-window) updates and full-screen refreshes.
+- A small object-oriented UI framework (pages, components, parameters) that
+  renders 1 bpp straight into the panel's frame buffer. **No LVGL.**
+- Dirty-region partial refreshes and full-screen refreshes.
 - WiFi STA connect only (no network services yet).
+- The same UI code runs on the panel, in host unit tests, and in a host
+  preview that writes PNGs, so UI work does not need the hardware.
+
+## UI framework
+
+```
+src/ui/
+  types.hpp      Rect/Size/Align math, anchor placement, rect merging
+  param.hpp      Param (typed value) + ParamSet + schema validation
+  font.hpp       Font/Glyph tables and UTF-8 decoding
+  canvas.hpp     1 bpp drawing surface: fill, stroke, text, blit, diff
+  component.hpp  Component base class (params, layout, draw, update)
+  components.hpp Label, Box, Rule, Container
+  page.hpp       Page = a named Container that covers the screen
+  app.hpp        UiApp: page stack + dirty-region computation
+  theme.hpp      fonts, colours, screen size
+  fonts/         generated Cozette tables (16 px, 96 px)
+src/screens/
+  status_page.hpp/.cpp   the actual screen
+```
+
+Everything above `epd.cpp` is platform-free: no ESP-IDF, no LVGL, no globals.
+That is why the native test and preview builds can link it unchanged.
+
+### Components and parameters
+
+A component is configured exclusively through parameters, which is what makes
+it testable without pixels or hardware:
+
+```cpp
+ui::ParamSet params{
+    {ui::Label::kText, ui::Param("Success")},
+    {ui::Label::kFont, ui::Param(&app::theme::headline_font())},
+    {ui::Component::kAnchor, ui::Param(ui::Align::Center)},
+    {ui::Component::kY, ui::Param(-30)},
+};
+page.add<ui::Label>("headline", params);
+```
+
+Common geometry parameters (accepted by every component):
+
+| Parameter | Type | Meaning |
+| --- | --- | --- |
+| `x`, `y` | int | offset after anchoring |
+| `w`, `h` | int | explicit size; omitted/0 means "measure the content" |
+| `anchor` | Align | `top-left` … `bottom-right`, `center` (default `top-left`) |
+| `visible` | bool | hidden components are neither laid out nor drawn |
+
+Component-specific parameters, e.g. `Label`: `text`, `font`, `color`,
+`halign`, `valign`; `Box`: `color` (omit for border-only), `border`,
+`border_color`; `Container`/`Page`: `bg`, `border`, `border_color`.
+
+`Component::schema()` declares the accepted parameters, so `validate()` reports
+unknown keys, missing required keys, wrong types and out-of-range integers.
+Both are covered by tests.
+
+### Layout
+
+`Component::layout(parent)` resolves `x/y/w/h/anchor` against the parent rect.
+When `w`/`h` are not given, `measure()` supplies the content size — a `Label`
+measures its text with the font that will draw it, so text is never clipped by
+a hard-coded box. Children are laid out inside their parent's bounds.
+
+### Pages and the app
+
+`Page` is a named `Container` pinned to the screen. `UiApp` owns the pages:
+
+```cpp
+ui::UiApp app(648, 480);
+app.add_page(std::make_unique<app::StatusPage>(wifi_source));
+app.tick(now_ms);                    // time-based updates
+auto dirty = app.present(canvas);    // draw + diff against the last frame
+```
+
+`present()` compares the freshly drawn frame with the previous one and returns
+the regions that changed:
+
+- leaf components are diffed per component bounds (a label that shrank still
+  reports the area it used to cover),
+- containers participate through a parameter *generation* counter, so changing
+  a background is reported even though no child changed,
+- a page switch or `invalidate()` reports the whole screen.
+
+The device then issues one partial refresh per region, and falls back to a
+full-screen refresh when a region is large or a partial update times out.
+
+### Adding a screen
+
+```cpp
+class ClockPage : public ui::Page {
+public:
+  ClockPage() : ui::Page("clock") {
+    add<ui::Label>("time", ui::ParamSet{
+        {ui::Label::kText, ui::Param("12:00")},
+        {ui::Label::kFont, ui::Param(&ui::fonts::kCozette96)},
+        {ui::Component::kAnchor, ui::Param(ui::Align::Center)},
+    });
+  }
+};
+```
+
+Then `app.add_page(std::make_unique<ClockPage>())` and
+`app.show_page("clock")`. The next `present()` reports the whole screen and the
+device does a full refresh.
+
+## Testing without the panel
+
+```sh
+pio test -e native      # 49 Unity tests, no hardware
+tools/preview.sh        # renders the real pages to PNG + ASCII
+```
+
+The suite covers geometry/anchor math, rect merging, parameter typing and
+schema validation, UTF-8 (including `Æ Ø Å æ ø å`), the 1 bpp canvas (unaligned
+fills, clipping, text alignment, hashing, region diffing), component layout and
+measurement, page/app navigation, dirty-region computation, and the real status
+page (counter ticks, heartbeat, WiFi text, exact dirty rects).
+
+`test_status_page` also pins a golden hash of the boot frame. When a change to
+the UI is intentional, refresh it with:
+
+```sh
+UPDATE_GOLDEN=1 pio test -e native -f test_status_page -v
+```
+
+`tools/preview.sh` builds `src/preview/preview_main.cpp` for the host, prints
+the component tree and an ASCII frame, and writes `preview-*.png` for the boot
+state, the counter ticking, the WiFi label and the "full" mode label.
+
+## Fonts
+
+`src/ui/fonts/` holds `lv_font_conv`-free, generated tables: 1 bpp bitmaps plus
+per-glyph advance/offset, produced from `CozetteVector-nerd.ttf` with printable
+ASCII and `Æ Ø Å æ ø å`.
+
+```sh
+python3 tools/gen_fonts.py ../CozetteVector-nerd.ttf src/ui/fonts
+```
+
+New files must be listed in `src/CMakeLists.txt` (the ESP-IDF component lists
+its sources explicitly).
+
+**Size matters on this panel:** the full waveform only turns ~4 px strokes
+fully black, so 1-2 px stems read grey. The headline uses 96 px Cozette
+(4 px stems); the 16 px labels are deliberately light.
 
 ## Wiring
 
 This is the mapping that works on the bench, identical to the
-`sample/working_half` Arduino sketch. It is **not** the Seeed XIAO eInk
-Expansion Board pinout, and it is not the old bench guess
-(`CS=2, DC=3, RST=4, BUSY=5, PWR=6`), which does not drive the panel.
+`sample/working_half` Arduino sketch.
 
 | HAT / panel pin | ESP32-S3 |
 | --- | --- |
@@ -28,12 +172,10 @@ Expansion Board pinout, and it is not the old bench guess
 | BUSY | GPIO1 (D0) |
 
 VCC must be **3.3 V** to match the XIAO logic. PWR is the panel power-enable
-control, not the supply; the proven sketch drives it high.
+control, not the supply; the proven sketch drives it high. SPI runs at **2 MHz**
+mode 0.
 
-SPI runs at **2 MHz** (mode 0). The panel is rated for 5 MHz, but the proven
-sketch uses 2 MHz and this HAT/dupont wiring is not happy above that.
-
-## Two things that are easy to get wrong
+### Two things that are easy to get wrong
 
 1. **RST low time must be a real millisecond.** `vTaskDelay(pdMS_TO_TICKS(1))`
    rounds to zero ticks at the default 100 Hz tick, so `delay_ms(1)` produces a
@@ -42,15 +184,11 @@ sketch uses 2 MHz and this HAT/dupont wiring is not happy above that.
    SPI happily clocks data out. `epd.cpp` therefore uses
    `esp_rom_delay_us(1000)`.
 2. **BUSY is polled with a `0x71` status read**, matching the working sketch:
-   `send 0x71; read BUSY; repeat`. Polling the pin alone also works, but the
-   status read is what the proven code does.
+   `send 0x71; read BUSY; repeat`.
 
 ## Panel init
 
-The init is the `sample/working_half` sequence plus Seeed's UC8179 drive
-voltages. Extra commands (TRES `0x61`, `0x15`, `0x60`) are deliberately absent.
-
-Full mode:
+Full mode (working_half sequence plus Seeed's UC8179 drive voltages):
 
 ```
 0x01 07 07 3F 3F        VGH/VGL/VDH/VDL
@@ -60,52 +198,20 @@ Full mode:
 0x50 21 07              VCOM / data interval (full waveform)
 ```
 
-Partial mode:
+Partial mode: `0x00 1F; 0x04 (wait); 0x50 29 07; 0xE0 02; 0xE5 58`.
 
-```
-0x00 1F
-0x04                    power on, wait BUSY
-0x50 29 07
-0xE0 02                 cascade
-0xE5 58                 forced temperature
-```
+Update protocol: window with `0x50 A9 07`, `0x91`, `0x90 ... 01`, write new
+data to `0x13`, `0x12`, wait, then write the same data to `0x10` as the "old"
+image. Plane polarity is `0x00 = black`, `0xFF = white`. A full refresh writes
+`0x10 = 0xFF`, `0x13 = frame`, then `0x12`.
 
-Update protocol (same as `refrence/src/escreen.h`): window with
-`0x50 A9 07`, `0x91`, `0x90 ... 01`, write new data to `0x13`, `0x12`,
-wait, then write the same data to `0x10` as the "old" image. Plane polarity
-is `0x00 = black`, `0xFF = white`.
-
-Full refresh writes `0x10 = 0xFF` (white), `0x13 = frame`, then `0x12`.
-
-## Fonts
-
-`src/fonts/` holds `lv_font_conv` output from `CozetteVector-nerd.ttf` with
-printable ASCII plus `Æ Ø Å æ ø å`. Reproduce with:
+## Build and flash
 
 ```sh
-npx lv_font_conv --size 16 --bpp 1 --format lvgl --font CozetteVector-nerd.ttf \
-  -r 0x20-0x7E -r 0xC5-0xC6 -r 0xD8 -r 0xE5-0xE6 -r 0xF8 --no-compress \
-  --lv-include lvgl.h --lv-font-name cozette_vector_16 -o src/fonts/cozette_vector_16.c
-```
-
-(96 px for the headline, 16 px for the small labels.)
-
-New font files must be added to `src/CMakeLists.txt` — the component lists its
-sources explicitly.
-
-**Size matters on this panel:** the full waveform only turns 1-2 px glyph stems
-fully black, so they read as grey. 96 px Cozette has ~4 px stems and is solid
-black; 16 px labels stay deliberately light.
-
-## Build
-
-```sh
-pio run
+pio run -e xiao
 ```
 
 The build is configured for the XIAO's 8 MB flash / 8 MB PSRAM.
-
-## Flash (bench)
 
 The board is on `botmain` at `/dev/ttyACM0` (USB-JTAG). `pyserial` is available
 there through Nix:
@@ -125,11 +231,13 @@ nix-shell -p python3Packages.pyserial --run \
 ```
 
 Serial console: `stty -F /dev/ttyACM0 115200 raw -echo; cat /dev/ttyACM0`.
+The boot log prints the component tree, the frame hash and every dirty region,
+which is usually enough to debug a layout change remotely.
 
 ## What the display shows
 
 - "Success" at 96 px Cozette, white background / black text.
-- Counter updated through LVGL + partial refreshes every 2 s.
-- A 36 x 36 tick box toggling every 7 s (a second independent partial update).
+- Counter updated through a partial refresh every 2 s.
+- A 36 x 36 heartbeat square toggling every 7 s.
 - WiFi status (`wifi: <ssid> (<ip>)`) in the bottom-left.
 - A full-screen full-mode refresh every 120 s to clear partial-update ghosting.

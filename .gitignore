@@ -5,3 +5,7 @@ sdkconfig.old
 sdkconfig.xiao
 compile_commands.json
 .vscode/
+
+# Host preview output
+preview-*.pgm
+preview-*.png

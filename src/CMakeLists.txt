@@ -1,7 +1,18 @@
+set(UI_SRCS
+    "ui/app.cpp"
+    "ui/canvas.cpp"
+    "ui/component.cpp"
+    "ui/components.cpp"
+    "ui/font.cpp"
+    "ui/fonts/cozette_16.cpp"
+    "ui/fonts/cozette_96.cpp"
+    "ui/page.cpp"
+    "ui/param.cpp"
+    "ui/types.cpp"
+    "screens/status_page.cpp")
+
 idf_component_register(
-    SRCS "main.cpp" "epd.cpp" "wifi.cpp"
-         "fonts/cozette_vector_16.c" "fonts/cozette_vector_48.c"
-         "fonts/cozette_vector_96.c"
+    SRCS "main.cpp" "epd.cpp" "wifi.cpp" ${UI_SRCS}
     INCLUDE_DIRS "."
-    PRIV_REQUIRES driver lvgl esp_wifi nvs_flash esp_event esp_netif
+    PRIV_REQUIRES driver esp_wifi nvs_flash esp_event esp_netif
 )
