@@ -1,0 +1,7 @@
+.pio/
+managed_components/
+sdkconfig
+sdkconfig.old
+sdkconfig.xiao
+compile_commands.json
+.vscode/
