@@ -39,37 +39,37 @@ public:
   bool begin();
 
   // Hard power/reset cycle, then program the controller in full or partial
-  // waveform mode. Mirrors the verified reference sequence for this panel.
+  // waveform mode. This is the reference escreen.h sequence verbatim: no TRES
+  // and no 0x92, because this panel's controller is sensitive to extra
+  // commands during bring-up.
   bool reset_and_init(bool partial);
 
-  // Full-screen update in full mode: old data is forced to white so every
-  // pixel is driven to the new frame. Leaves the panel in partial mode.
+  // Full-screen clear in full-waveform mode (0x10 and 0x13 both get `color`).
+  bool clear(uint8_t color);
+
+  // Full-waveform repaint of `frame`: init full, draw/refresh the whole frame,
+  // then return to the partial configuration.
   bool full_refresh(const uint8_t *frame);
 
-  // Windowed update. Sends the previous frame as OLD and the new frame as NEW
-  // for the same window, then issues 0x12.
-  bool partial_update(const uint8_t *old_frame, const uint8_t *new_frame,
-                      const Rect &area);
+  // Partial update: write NEW (0x13), refresh (0x12), wait, then preload OLD
+  // (0x10) with the same frame. This is exactly the reference draw_partial +
+  // apply_old_buffer order.
+  bool partial_update(const uint8_t *frame, const Rect &area);
 
   bool wait_idle(uint32_t timeout_ms, const char *what);
   bool is_busy() const { return gpio_get_level(kPinBusy) == 0; }
-
-  // Bring-up diagnostic: reset, initialise, write a full OLD/NEW frame and
-  // issue 0x12, then report whether BUSY ever asserted. Used to probe the
-  // power-enable polarity on the bench.
-  bool refresh_liveness_test(const char *label, uint8_t old_fill,
-                             uint8_t new_fill);
-
-  // Same liveness test but clocking MOSI/SCLK by hand, to separate a hardware
-  // SPI configuration problem from a panel/wiring/power problem.
-  bool soft_spi_liveness_test();
-
   int busy_level() const { return gpio_get_level(kPinBusy); }
+
+  // Bench diagnostics for the panel power-enable net.
+  void power_output(bool high);
+  void power_high_z();
 
 private:
   void reset_panel();
   void init_mode(bool partial);
   void set_window(int x1_byte, int x2_byte, int y1, int y2);
+  bool draw_and_refresh(const uint8_t *frame, int x1_byte, int x2_byte,
+                        int y1, int y2);
   void write_window(const uint8_t *src, int stride, int x1_byte, int x2_byte,
                     int y1, int y2);
   void write_fill(uint8_t value, size_t count);
@@ -80,12 +80,9 @@ private:
   void end_stream();
   void send_raw(const uint8_t *data, size_t len);
 
-  void soft_init();
-
   spi_device_handle_t spi_ = nullptr;
   uint8_t *dma_buf_ = nullptr;
   bool partial_mode_ = true;
-  bool soft_mode_ = false;
 };
 
 } // namespace epd

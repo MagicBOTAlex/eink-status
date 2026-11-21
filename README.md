@@ -10,15 +10,44 @@ Barebones PlatformIO + ESP-IDF firmware for a single Good Display
 
 ## Wiring
 
+The panel is a Waveshare 5.83" 10-pin e-paper module. The connector order is:
+
+| Pin | Signal | Notes |
+| --- | --- | --- |
+| 1 | PWR | panel power control (not the 3.3 V supply) |
+| 2 | BUSY | active low |
+| 3 | RST | active low |
+| 4 | DC | command low, data high |
+| 5 | CS_S | slave controller select |
+| 6 | CS_M | master controller select |
+| 7 | SCLK | SPI clock |
+| 8 | DIN | SPI MOSI |
+| 9 | GND | |
+| 10 | VCC | 3.3 V |
+
+**VCC (pin 10) and GND (pin 9) must be connected.** PWR is only a control
+signal; it does not power the panel.
+
+### Direct-GPIO mapping used by this firmware
+
 | Panel | ESP32-S3 |
 | --- | --- |
-| DIN / MOSI | GPIO9 |
-| CLK / SCK | GPIO7 |
-| CS | GPIO2 |
-| DC | GPIO3 |
-| RST | GPIO4 |
-| BUSY | GPIO5 |
-| PWR | GPIO6 |
+| DIN (pin 8) | GPIO9 |
+| SCLK (pin 7) | GPIO7 |
+| CS_M (pin 6) | GPIO2 |
+| DC (pin 4) | GPIO3 |
+| RST (pin 3) | GPIO4 |
+| BUSY (pin 2) | GPIO5 |
+| PWR (pin 1) | GPIO6 |
+
+The earlier bench wiring had **CS on pin 5 (CS_S)** and left **CS_M floating**.
+A dual module only refreshes when the master is addressed (and ideally both CS
+lines are driven). Move CS to pin 6, or tie pins 5 and 6 together to GPIO2.
+
+The working direct-GPIO half project in the Countr tree
+(`arduino/half_display/working_half`) uses `RST=2, DC=3, CS=4, BUSY=1, PWR=5`
+with `SPI.begin(7, 8, 9)`. That is a different physical header and is another
+valid mapping if the board is wired that way.
 
 ## Build
 

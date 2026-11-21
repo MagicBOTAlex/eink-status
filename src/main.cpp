@@ -1,7 +1,6 @@
 #include <cstdio>
 #include <cstring>
 
-#include "driver/gpio.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -12,14 +11,17 @@
 #include "epd.hpp"
 #include "wifi.hpp"
 
+// Precompiled from CozetteVector-nerd.ttf (1 bpp). Both subsets contain
+// printable ASCII (U+0020..U+007E) plus the Danish letters Æ Ø Å æ ø å.
+LV_FONT_DECLARE(cozette_vector_16);
+LV_FONT_DECLARE(cozette_vector_48);
+
 namespace {
 
 constexpr const char *TAG = "MAIN";
 
-// Set to 1 to run the panel liveness/polarity probes at boot. These were used
-// to establish that the bench panel was not responding at all; keep them for
-// the next hardware session.
-#define EPD_DIAG 0
+// Set to 1 to dump the packed 1 bpp frame over the console.
+#define FRAME_DUMP 0
 
 // LVGL renders in horizontal strips. 648 px = 81 bytes per row; 60 rows plus
 // room for the indexed-format palette in front of the pixels.
@@ -34,7 +36,6 @@ constexpr uint32_t kFullRefreshPeriodMs = 120000;
 
 epd::Driver g_driver;
 uint8_t *g_next = nullptr;
-uint8_t *g_prev = nullptr;
 lv_display_t *g_disp = nullptr;
 lv_obj_t *g_counter = nullptr;
 lv_obj_t *g_status = nullptr;
@@ -71,9 +72,6 @@ void dirty_join(const lv_area_t *area) {
 
 void dirty_reset() { g_dirty = {0, 0, -1, -1}; }
 
-// LVGL 9 indexed formats put a palette in front of the pixel bytes of every
-// draw buffer. The flush callback receives the buffer start, not the first
-// pixel.
 constexpr uint32_t kPaletteBytes =
     LV_COLOR_INDEXED_PALETTE_SIZE(LV_COLOR_FORMAT_I1) * sizeof(lv_color32_t);
 
@@ -85,8 +83,8 @@ void flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px_map) {
   }
 
   const int32_t w = lv_area_get_width(area);
-  const uint32_t src_stride = lv_draw_buf_width_to_stride(
-      w, lv_display_get_color_format(disp));
+  const uint32_t src_stride =
+      lv_draw_buf_width_to_stride(w, lv_display_get_color_format(disp));
   const int32_t copy_bytes = (w + 7) / 8;
   const int32_t dst_x_byte = area->x1 / 8;
 
@@ -111,32 +109,39 @@ void build_ui() {
   lv_obj_t *title = lv_label_create(scr);
   lv_label_set_text(title, "eink-status");
   lv_obj_set_style_text_color(title, lv_color_white(), 0);
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_font(title, &cozette_vector_16, 0);
   lv_obj_align(title, LV_ALIGN_TOP_LEFT, 16, 12);
 
   g_mode = lv_label_create(scr);
   lv_label_set_text(g_mode, "partial");
   lv_obj_set_style_text_color(g_mode, lv_color_white(), 0);
-  lv_obj_set_style_text_font(g_mode, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_font(g_mode, &cozette_vector_16, 0);
   lv_obj_align(g_mode, LV_ALIGN_TOP_RIGHT, -16, 12);
 
+  lv_obj_t *success = lv_label_create(scr);
+  lv_label_set_text(success, "Success");
+  lv_obj_set_style_text_color(success, lv_color_white(), 0);
+  lv_obj_set_style_text_font(success, &cozette_vector_48, 0);
+  lv_obj_align(success, LV_ALIGN_CENTER, 0, -40);
+
+  // Small counter kept for the partial-update demo (the "Success" label itself
+  // is static).
   g_counter = lv_label_create(scr);
   lv_label_set_text(g_counter, "0000");
   lv_obj_set_style_text_color(g_counter, lv_color_white(), 0);
-  lv_obj_set_style_text_font(g_counter, &lv_font_montserrat_48, 0);
-  lv_obj_set_style_text_letter_space(g_counter, 10, 0);
-  lv_obj_align(g_counter, LV_ALIGN_CENTER, 0, -18);
+  lv_obj_set_style_text_font(g_counter, &cozette_vector_16, 0);
+  lv_obj_align(g_counter, LV_ALIGN_CENTER, 0, 32);
 
   lv_obj_t *subtitle = lv_label_create(scr);
   lv_label_set_text(subtitle, "LVGL 1bpp / GDEY0583T81");
   lv_obj_set_style_text_color(subtitle, lv_color_white(), 0);
-  lv_obj_set_style_text_font(subtitle, &lv_font_montserrat_14, 0);
-  lv_obj_align(subtitle, LV_ALIGN_CENTER, 0, 40);
+  lv_obj_set_style_text_font(subtitle, &cozette_vector_16, 0);
+  lv_obj_align(subtitle, LV_ALIGN_CENTER, 0, 72);
 
   g_status = lv_label_create(scr);
   lv_label_set_text(g_status, "wifi: starting");
   lv_obj_set_style_text_color(g_status, lv_color_white(), 0);
-  lv_obj_set_style_text_font(g_status, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_font(g_status, &cozette_vector_16, 0);
   lv_obj_align(g_status, LV_ALIGN_BOTTOM_LEFT, 16, -12);
 
   g_tick = lv_obj_create(scr);
@@ -148,18 +153,26 @@ void build_ui() {
   lv_obj_align(g_tick, LV_ALIGN_BOTTOM_RIGHT, -16, -10);
 }
 
+#if FRAME_DUMP
+void dump_frame() {
+  ESP_LOGI(TAG, "FRAME_BEGIN %d %d %d", epd::kWidth, epd::kHeight,
+           (int)epd::kFrameBytes);
+  char line[2 * 24 + 1];
+  for (size_t off = 0; off < epd::kFrameBytes; off += 24) {
+    const size_t n =
+        (epd::kFrameBytes - off < 24) ? (epd::kFrameBytes - off) : 24;
+    for (size_t i = 0; i < n; ++i) {
+      std::snprintf(line + i * 2, 3, "%02x", g_next[off + i]);
+    }
+    ESP_LOGI(TAG, "F %s", line);
+  }
+  ESP_LOGI(TAG, "FRAME_END");
+}
+#endif
+
 void set_mode_label(const char *text) {
   if (g_mode != nullptr) {
     lv_label_set_text(g_mode, text);
-  }
-}
-
-void copy_area(uint8_t *dst, const uint8_t *src, int x1_byte, int x2_byte,
-               int y1, int y2) {
-  const size_t n = static_cast<size_t>(x2_byte - x1_byte + 1);
-  for (int y = y1; y <= y2; ++y) {
-    std::memcpy(dst + static_cast<size_t>(y) * epd::kStride + x1_byte,
-                src + static_cast<size_t>(y) * epd::kStride + x1_byte, n);
   }
 }
 
@@ -169,8 +182,8 @@ bool send_dirty_area() {
     return true;
   }
 
-  epd::Rect area = {g_dirty.x1 & ~7, g_dirty.y1,
-                    (g_dirty.x2 | 7), g_dirty.y2};
+  epd::Rect area = {g_dirty.x1 & ~7, g_dirty.y1, (g_dirty.x2 | 7),
+                    g_dirty.y2};
   if (area.x1 < 0) {
     area.x1 = 0;
   }
@@ -184,10 +197,7 @@ bool send_dirty_area() {
     area.y2 = epd::kHeight - 1;
   }
 
-  const bool ok = g_driver.partial_update(g_prev, g_next, area);
-  if (ok) {
-    copy_area(g_prev, g_next, area.x1 / 8, area.x2 / 8, area.y1, area.y2);
-  }
+  const bool ok = g_driver.partial_update(g_next, area);
   dirty_reset();
   return ok;
 }
@@ -199,9 +209,7 @@ void full_refresh_now(const char *why) {
   lv_refr_now(g_disp);
   dirty_reset();
 
-  const bool ok = g_driver.full_refresh(g_next);
-  if (ok) {
-    std::memcpy(g_prev, g_next, epd::kFrameBytes);
+  if (g_driver.full_refresh(g_next)) {
     set_mode_label("partial");
   } else {
     ESP_LOGE(TAG, "full refresh failed");
@@ -228,84 +236,31 @@ void refresh_wifi_label() {
 
 extern "C" void app_main() {
   ESP_LOGI(TAG, "boot");
-#if EPD_DIAG
-  ESP_LOGI(TAG, "diagnostic build: waiting 5 s for the console");
-  vTaskDelay(pdMS_TO_TICKS(5000));
-#endif
   ESP_LOGI(TAG, "heap: internal free=%u largest=%u psram free=%u",
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
            (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
   g_next = alloc_frame();
-  g_prev = alloc_frame();
-  if (g_next == nullptr || g_prev == nullptr) {
-    ESP_LOGE(TAG, "frame buffers unavailable");
+  if (g_next == nullptr) {
+    ESP_LOGE(TAG, "frame buffer unavailable");
     return;
   }
   std::memset(g_next, 0xFF, epd::kFrameBytes);
-  std::memset(g_prev, 0xFF, epd::kFrameBytes);
 
   if (!g_driver.begin()) {
     ESP_LOGE(TAG, "EPD driver init failed");
     return;
   }
 
-#if EPD_DIAG
-  {
-    gpio_config_t probe = {};
-    probe.pin_bit_mask = (1ULL << epd::kPinBusy);
-    probe.mode = GPIO_MODE_INPUT;
-    probe.intr_type = GPIO_INTR_DISABLE;
-    probe.pull_down_en = GPIO_PULLDOWN_ENABLE;
-    probe.pull_up_en = GPIO_PULLUP_DISABLE;
-    gpio_config(&probe);
-    vTaskDelay(pdMS_TO_TICKS(10));
-    ESP_LOGI(TAG, "BUSY probe pull-down: %d", gpio_get_level(epd::kPinBusy));
-    probe.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    probe.pull_up_en = GPIO_PULLUP_ENABLE;
-    gpio_config(&probe);
-    vTaskDelay(pdMS_TO_TICKS(10));
-    ESP_LOGI(TAG, "BUSY probe pull-up: %d", gpio_get_level(epd::kPinBusy));
-  }
-
-  ESP_LOGI(TAG, "diagnostic: PWR high, hardware SPI");
-  gpio_set_level(epd::kPinPwr, 1);
+  // Reference DUAL leaves the panel power-enable pin alone (it is the shared
+  // slave BUSY input there). Try high-Z first, then output states if needed.
+  ESP_LOGI(TAG, "panel bring-up: PWR high + full init + black clear");
+  g_driver.power_output(true);
   vTaskDelay(pdMS_TO_TICKS(300));
-  g_driver.refresh_liveness_test("pwr-high", 0xFF, 0x00);
-
-  ESP_LOGI(TAG, "diagnostic: PWR high-Z, hardware SPI");
-  {
-    gpio_config_t pwr = {};
-    pwr.pin_bit_mask = (1ULL << epd::kPinPwr);
-    pwr.mode = GPIO_MODE_INPUT;
-    pwr.pull_up_en = GPIO_PULLUP_ENABLE;
-    pwr.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    gpio_config(&pwr);
-  }
-  vTaskDelay(pdMS_TO_TICKS(300));
-  g_driver.refresh_liveness_test("pwr-hiz", 0xFF, 0x00);
-
-  ESP_LOGI(TAG, "diagnostic: PWR high, software SPI");
-  {
-    gpio_config_t pwr = {};
-    pwr.pin_bit_mask = (1ULL << epd::kPinPwr);
-    pwr.mode = GPIO_MODE_OUTPUT;
-    gpio_config(&pwr);
-  }
-  gpio_set_level(epd::kPinPwr, 1);
-  vTaskDelay(pdMS_TO_TICKS(300));
-  g_driver.soft_spi_liveness_test();
-
-  ESP_LOGI(TAG, "diagnostic done; PWR high");
-  gpio_set_level(epd::kPinPwr, 1);
-  vTaskDelay(pdMS_TO_TICKS(300));
-#endif
-
-  ESP_LOGI(TAG, "panel bring-up: full white pass");
   g_driver.reset_and_init(false);
-  if (!g_driver.full_refresh(g_next)) {
-    ESP_LOGE(TAG, "initial white full refresh failed");
+  if (!g_driver.clear(0x00)) {
+    ESP_LOGE(TAG, "full-mode black clear did not complete");
   }
 
   ESP_LOGI(TAG, "LVGL init");
@@ -349,9 +304,11 @@ extern "C" void app_main() {
              (unsigned)hash, (unsigned)zero, (unsigned)ones,
              (unsigned)epd::kFrameBytes);
   }
+#if FRAME_DUMP
+  dump_frame();
+#endif
 
   full_refresh_now("first frame");
-
   netwifi::start();
 
   uint32_t last_counter = 0;

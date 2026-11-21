@@ -15,6 +15,7 @@ constexpr const char *TAG = "EPD";
 constexpr size_t kDmaChunk = 4096;
 
 void delay_ms(uint32_t ms) { vTaskDelay(pdMS_TO_TICKS(ms)); }
+void settle() { esp_rom_delay_us(200); }
 
 } // namespace
 
@@ -75,28 +76,21 @@ bool Driver::begin() {
     return false;
   }
 
-  ESP_LOGI(TAG, "SPI up: MOSI=%d CLK=%d CS=%d DC=%d RST=%d BUSY=%d PWR=%d @ %d Hz",
+  int actual_khz = 0;
+  if (spi_device_get_actual_freq(spi_, &actual_khz) != ESP_OK) {
+    actual_khz = 0;
+  }
+  ESP_LOGI(TAG,
+           "SPI up: MOSI=%d CLK=%d CS=%d DC=%d RST=%d BUSY=%d PWR=%d "
+           "requested=%d actual=%d Hz",
            (int)kPinMosi, (int)kPinSclk, (int)kPinCs, (int)kPinDc, (int)kPinRst,
-           (int)kPinBusy, (int)kPinPwr, kSpiClockHz);
+           (int)kPinBusy, (int)kPinPwr, kSpiClockHz, actual_khz * 1000);
   ESP_LOGI(TAG, "BUSY level before reset: %d", busy_level());
   return true;
 }
 
 void Driver::send_raw(const uint8_t *data, size_t len) {
   if (len == 0) {
-    return;
-  }
-  if (soft_mode_) {
-    for (size_t i = 0; i < len; ++i) {
-      const uint8_t b = data[i];
-      for (int bit = 7; bit >= 0; --bit) {
-        gpio_set_level(kPinMosi, (b >> bit) & 1);
-        esp_rom_delay_us(2);
-        gpio_set_level(kPinSclk, 1);
-        esp_rom_delay_us(2);
-        gpio_set_level(kPinSclk, 0);
-      }
-    }
     return;
   }
   spi_transaction_t t = {};
@@ -111,50 +105,74 @@ void Driver::send_raw(const uint8_t *data, size_t len) {
 
 void Driver::send_cmd(uint8_t cmd) {
   gpio_set_level(kPinCs, 1);
+  settle();
   gpio_set_level(kPinDc, 0);
+  settle();
   gpio_set_level(kPinCs, 0);
+  settle();
   send_raw(&cmd, 1);
+  settle();
   gpio_set_level(kPinCs, 1);
+  settle();
 }
 
 void Driver::send_data(uint8_t data) {
   gpio_set_level(kPinCs, 1);
+  settle();
   gpio_set_level(kPinDc, 1);
+  settle();
   gpio_set_level(kPinCs, 0);
+  settle();
   send_raw(&data, 1);
+  settle();
   gpio_set_level(kPinCs, 1);
+  settle();
 }
 
 void Driver::start_stream(uint8_t cmd) {
   send_cmd(cmd);
   gpio_set_level(kPinDc, 1);
+  settle();
   gpio_set_level(kPinCs, 0);
+  settle();
 }
 
-void Driver::end_stream() { gpio_set_level(kPinCs, 1); }
+void Driver::end_stream() {
+  settle();
+  gpio_set_level(kPinCs, 1);
+  settle();
+}
+
+void Driver::power_output(bool high) {
+  gpio_config_t o = {};
+  o.pin_bit_mask = (1ULL << kPinPwr);
+  o.mode = GPIO_MODE_OUTPUT;
+  gpio_config(&o);
+  gpio_set_level(kPinPwr, high ? 1 : 0);
+}
+
+void Driver::power_high_z() {
+  gpio_config_t i = {};
+  i.pin_bit_mask = (1ULL << kPinPwr);
+  i.mode = GPIO_MODE_INPUT;
+  i.pull_up_en = GPIO_PULLUP_ENABLE;
+  i.pull_down_en = GPIO_PULLDOWN_DISABLE;
+  gpio_config(&i);
+}
 
 void Driver::reset_panel() {
-  gpio_set_level(kPinRst, 1);
-  delay_ms(20);
+  // The working direct-GPIO half project uses a short low pulse and a long
+  // settle after release (RST low 1 ms, high 200 ms).
   gpio_set_level(kPinRst, 0);
-  delay_ms(10);
+  delay_ms(1);
   gpio_set_level(kPinRst, 1);
-  delay_ms(20);
+  delay_ms(200);
   ESP_LOGI(TAG, "panel reset done, BUSY=%d", busy_level());
 }
 
 void Driver::init_mode(bool partial) {
   send_cmd(0x00);
   send_data(0x1F);
-
-  // The controller powers up with a 680 px default resolution; this panel is
-  // 648 px. Without TRES the data counter expects 85-byte rows and the 81-byte
-  // rows we send never fill the frame, so 0x12 never starts a refresh.
-  send_cmd(0x61);
-  send_data((kWidth >> 8) & 0xFF);
-  send_data(kWidth & 0xFF);
-  send_data((kHeight >> 8) & 0xFF);
-  send_data(kHeight & 0xFF);
 
   send_cmd(0x04); // power on
   delay_ms(100);
@@ -163,13 +181,17 @@ void Driver::init_mode(bool partial) {
   send_data(0x29);
   send_data(0x07);
 
-  send_cmd(0xE0); // cascade / clock output
-  send_data(0x02);
+  if (partial) {
+    send_cmd(0xE0);
+    send_data(0x02);
+  } else {
+    send_cmd(0x50);
+    send_data(0x21);
+    send_data(0x07);
+  }
 
-  // Forced temperature: the Good Display sample uses a higher value for the
-  // partial waveform. Same values as ESPHome's GDEY0583T81 driver.
   send_cmd(0xE5);
-  send_data(partial ? 0x6E : 0x5A);
+  send_data(0x58);
 
   partial_mode_ = partial;
   ESP_LOGI(TAG, "init mode: %s", partial ? "partial" : "full");
@@ -201,7 +223,7 @@ void Driver::set_window(int x1_byte, int x2_byte, int y1, int y2) {
   send_data(ys & 0xFF);
   send_data(ye >> 8);
   send_data(ye & 0xFF);
-  send_data(0x01); // PT_SCAN: scan inside and outside the window
+  send_data(0x01); // PT_SCAN
 }
 
 void Driver::write_window(const uint8_t *src, int stride, int x1_byte,
@@ -214,7 +236,8 @@ void Driver::write_window(const uint8_t *src, int stride, int x1_byte,
     size_t offset = 0;
     while (offset < row_bytes) {
       const size_t space = kDmaChunk - used;
-      const size_t n = (row_bytes - offset < space) ? (row_bytes - offset) : space;
+      const size_t n =
+          (row_bytes - offset < space) ? (row_bytes - offset) : space;
       std::memcpy(dma_buf_ + used, row + offset, n);
       used += n;
       offset += n;
@@ -254,105 +277,72 @@ bool Driver::wait_idle(uint32_t timeout_ms, const char *what) {
   return true;
 }
 
+bool Driver::draw_and_refresh(const uint8_t *frame, int x1_byte, int x2_byte,
+                              int y1, int y2) {
+  if (!wait_idle(20000, "pre-draw")) {
+    return false;
+  }
+
+  set_window(x1_byte, x2_byte, y1, y2);
+  start_stream(0x13);
+  write_window(frame, kStride, x1_byte, x2_byte, y1, y2);
+  end_stream();
+
+  send_cmd(0x12);
+  delay_ms(20);
+  if (!wait_idle(45000, "refresh")) {
+    return false;
+  }
+
+  // Preload OLD with the frame just displayed, exactly like the reference's
+  // apply_old_buffer() after its memcpy. The next partial window then has a
+  // valid OLD buffer even if it is a different area.
+  set_window(x1_byte, x2_byte, y1, y2);
+  start_stream(0x10);
+  write_window(frame, kStride, x1_byte, x2_byte, y1, y2);
+  end_stream();
+
+  return true;
+}
+
+bool Driver::clear(uint8_t color) {
+  if (!wait_idle(30000, "pre-clear")) {
+    return false;
+  }
+
+  init_mode(false);
+
+  set_window(0, kStride - 1, 0, kHeight - 1);
+  start_stream(0x10);
+  write_fill(color, kFrameBytes);
+  end_stream();
+
+  set_window(0, kStride - 1, 0, kHeight - 1);
+  start_stream(0x13);
+  write_fill(color, kFrameBytes);
+  end_stream();
+
+  send_cmd(0x12);
+  delay_ms(20);
+  return wait_idle(45000, "clear");
+}
+
 bool Driver::full_refresh(const uint8_t *frame) {
   if (!wait_idle(30000, "pre-full")) {
     return false;
   }
 
   init_mode(false);
-
-  // A full update is a plain full-frame NEW write with no partial window. The
-  // controller's full waveform drives every pixel (including the white phases
-  // that clear ghosting). This mirrors the GoodDisplay/ESPHome sequence.
-  start_stream(0x13);
-  write_window(frame, kStride, 0, kStride - 1, 0, kHeight - 1);
-  end_stream();
-
-  send_cmd(0x12);
-  delay_ms(20);
-  const bool ok = wait_idle(45000, "full refresh");
-
-  // Leave the controller in the fast partial configuration for normal updates.
+  const bool ok = draw_and_refresh(frame, 0, kStride - 1, 0, kHeight - 1);
   init_mode(true);
   return ok;
 }
 
-void Driver::soft_init() {
-  gpio_config_t o = {};
-  o.pin_bit_mask = (1ULL << kPinMosi) | (1ULL << kPinSclk);
-  o.mode = GPIO_MODE_OUTPUT;
-  o.pull_up_en = GPIO_PULLUP_DISABLE;
-  o.pull_down_en = GPIO_PULLDOWN_DISABLE;
-  o.intr_type = GPIO_INTR_DISABLE;
-  ESP_ERROR_CHECK(gpio_config(&o));
-  gpio_set_level(kPinMosi, 0);
-  gpio_set_level(kPinSclk, 0);
-  soft_mode_ = true;
-  ESP_LOGI(TAG, "software SPI enabled (MOSI=%d CLK=%d)", (int)kPinMosi,
-           (int)kPinSclk);
-}
-
-bool Driver::soft_spi_liveness_test() {
-  soft_init();
-  reset_panel();
-  init_mode(false);
-
-  start_stream(0x13);
-  write_fill(0x00, kFrameBytes);
-  end_stream();
-
-  send_cmd(0x12);
-
-  bool asserted = false;
-  for (int i = 0; i < 300; ++i) {
-    if (is_busy()) {
-      asserted = true;
-      break;
-    }
-    delay_ms(10);
-  }
-  ESP_LOGI(TAG, "soft-spi: BUSY asserted=%d level=%d", asserted, busy_level());
-  if (asserted) {
-    wait_idle(45000, "soft-spi");
-  }
-  soft_mode_ = false;
-  return asserted;
-}
-
-bool Driver::refresh_liveness_test(const char *label, uint8_t old_fill,
-                                   uint8_t new_fill) {
-  (void)old_fill;
-  reset_panel();
-  init_mode(false);
-
-  start_stream(0x13);
-  write_fill(new_fill, kFrameBytes);
-  end_stream();
-
-  send_cmd(0x12);
-
-  bool asserted = false;
-  for (int i = 0; i < 100; ++i) {
-    if (is_busy()) {
-      asserted = true;
-      break;
-    }
-    delay_ms(10);
-  }
-  ESP_LOGI(TAG, "%s: BUSY asserted=%d level=%d", label, asserted, busy_level());
-  if (asserted) {
-    wait_idle(45000, label);
-  }
-  return asserted;
-}
-
-bool Driver::partial_update(const uint8_t *old_frame, const uint8_t *new_frame,
-                            const Rect &area) {
+bool Driver::partial_update(const uint8_t *frame, const Rect &area) {
   if (!partial_mode_) {
     init_mode(true);
   }
 
-  // Whole byte columns only; the panel addresses 8-pixel banks.
   int x1b = area.x1 / 8;
   int x2b = area.x2 / 8;
   if (x1b < 0) {
@@ -367,25 +357,7 @@ bool Driver::partial_update(const uint8_t *old_frame, const uint8_t *new_frame,
     return true;
   }
 
-  if (!wait_idle(20000, "pre-partial")) {
-    return false;
-  }
-
-  set_window(x1b, x2b, y1, y2);
-  start_stream(0x10);
-  write_window(old_frame, kStride, x1b, x2b, y1, y2);
-  end_stream();
-
-  start_stream(0x13);
-  write_window(new_frame, kStride, x1b, x2b, y1, y2);
-  end_stream();
-
-  send_cmd(0x12);
-  delay_ms(20);
-  const bool ok = wait_idle(20000, "partial refresh");
-  if (ok) {
-    send_cmd(0x92); // partial out, back to normal mode
-  }
+  const bool ok = draw_and_refresh(frame, x1b, x2b, y1, y2);
   ESP_LOGI(TAG, "partial x=%d..%d y=%d..%d -> %s", x1b * 8, x2b * 8 + 7, y1,
            y2, ok ? "ok" : "TIMEOUT");
   return ok;
