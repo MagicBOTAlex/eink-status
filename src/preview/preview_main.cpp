@@ -39,13 +39,18 @@ bool write_pgm(const std::string &path, const ui::Canvas &canvas) {
     std::perror(path.c_str());
     return false;
   }
-  std::fprintf(f, "P5\n%d %d\n255\n", canvas.width(), canvas.height());
-  for (int y = 0; y < canvas.height(); ++y) {
-    for (int x = 0; x < canvas.width(); ++x) {
-      std::fputc(canvas.test(x, y) ? 0 : 255, f);
+  bool ok = std::fprintf(f, "P5\n%d %d\n255\n", canvas.width(),
+                         canvas.height()) > 0;
+  for (int y = 0; ok && y < canvas.height(); ++y) {
+    for (int x = 0; ok && x < canvas.width(); ++x) {
+      ok = std::fputc(canvas.test(x, y) ? 0 : 255, f) != EOF;
     }
   }
-  std::fclose(f);
+  ok = (std::fclose(f) == 0) && ok;
+  if (!ok) {
+    std::perror(path.c_str());
+    return false;
+  }
   std::printf("wrote %s\n", path.c_str());
   return true;
 }

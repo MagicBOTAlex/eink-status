@@ -29,6 +29,9 @@ public:
   // "full" while a full-screen refresh is running, "partial" otherwise.
   void set_mode(const std::string &mode);
 
+  // Panel state from the driver, via the framework hook.
+  void on_display_mode(ui::DisplayMode mode) override;
+
   ui::Label &counter_label() { return *counter_; }
   ui::Label &wifi_label() { return *wifi_; }
   ui::Label &mode_label() { return *mode_; }
@@ -46,6 +49,8 @@ private:
 
   uint32_t last_counter_ms_ = 0;
   uint32_t last_tick_ms_ = 0;
+  uint32_t last_wifi_ms_ = 0;
+  bool wifi_polled_ = false;
   int counter_value_ = 0;
   bool tick_on_ = true;
   std::string last_wifi_text_;

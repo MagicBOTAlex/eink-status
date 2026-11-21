@@ -30,10 +30,12 @@ public:
   const std::string &id() const { return id_; }
   virtual const char *type_name() const = 0;
 
+  // Read-only view. Mutating through `set()` is what keeps the generation
+  // counter (and therefore the dirty-region tracker) honest.
   const ParamSet &params() const { return params_; }
-  ParamSet &params() { return params_; }
   Component &set(std::string key, Param value);
   Component &set(const ParamSet &values);
+  Component &remove_param(const std::string &key);
   const Param *param(const std::string &key) const;
   bool has_param(const std::string &key) const;
 
@@ -141,7 +143,7 @@ public:
   template <typename T, typename... Args> T &add(Args &&...args) {
     auto owned = std::make_unique<T>(std::forward<Args>(args)...);
     T &ref = *owned;
-    children_.push_back(std::move(owned));
+    add_child(std::move(owned));
     return ref;
   }
 

@@ -60,9 +60,11 @@ Component-specific parameters, e.g. `Label`: `text`, `font`, `color`,
 `halign`, `valign`; `Box`: `color` (omit for border-only), `border`,
 `border_color`; `Container`/`Page`: `bg`, `border`, `border_color`.
 
-`Component::schema()` declares the accepted parameters, so `validate()` reports
-unknown keys, missing required keys, wrong types and out-of-range integers.
-Both are covered by tests.
+`Component::schema()` declares the accepted parameters (type, required, int
+range). Components apply their own fallbacks with `ParamSet::get_*`, and
+`validate()` reports unknown keys, missing **or empty** required keys, wrong
+types and out-of-range integers. `UiApp::validation_errors()` collects those
+for every registered page and the device logs them at boot.
 
 ### Layout
 
@@ -91,8 +93,28 @@ the regions that changed:
   a background is reported even though no child changed,
 - a page switch or `invalidate()` reports the whole screen.
 
-The device then issues one partial refresh per region, and falls back to a
-full-screen refresh when a region is large or a partial update times out.
+Drawing is clipped to each component's bounds, and labels measure their **ink**
+extent rather than the advance sum (a few Cozette glyphs, e.g. `4`, paint past
+their advance). Together these guarantee that a component can never paint
+outside the area the dirty tracker reports.
+
+### Refresh policy
+
+`src/panel_plan.hpp` turns UI rects into panel windows and decides what to do.
+It is deliberately ESP-free so the host tests cover it:
+
+```cpp
+panel::Window w = panel::to_window(ui::Rect{284, 275, 80, 20}); // x1,y1,x2,y2 inclusive
+panel::Action a = panel::choose(dirty, /*max_regions=*/4, /*max_area=*/648*480/2);
+bool due = panel::due(now, last_full, 120000);                  // wrap-safe
+```
+
+`ui::Rect` is `(x, y, w, h)` while the UC8179 window is inclusive edges; mixing
+them up silently invalidates every partial window (the driver now rejects an
+invalid window instead of pretending success). The device issues one partial
+refresh per region and falls back to a full refresh when a region is large, too
+many regions changed, a partial update fails, or the 120 s ghost cleanup is due.
+A failed full refresh keeps the panel dirty and retries after 5 s.
 
 ### Adding a screen
 
@@ -116,22 +138,32 @@ device does a full refresh.
 ## Testing without the panel
 
 ```sh
-pio test -e native      # 49 Unity tests, no hardware
+pio test -e native      # 77 Unity tests, no hardware
 tools/preview.sh        # renders the real pages to PNG + ASCII
+python3 tools/check_sources.py   # every ui/*.cpp is in src/CMakeLists.txt
 ```
 
 The suite covers geometry/anchor math, rect merging, parameter typing and
-schema validation, UTF-8 (including `Æ Ø Å æ ø å`), the 1 bpp canvas (unaligned
-fills, clipping, text alignment, hashing, region diffing), component layout and
-measurement, page/app navigation, dirty-region computation, and the real status
-page (counter ticks, heartbeat, WiFi text, exact dirty rects).
+schema validation, UTF-8 (including malformed, truncated, overlong and
+embedded-NUL input and `Æ Ø Å æ ø å`), the 1 bpp canvas (unaligned and
+partly-used edge bytes, clipping, invert strokes, multi-byte glyphs, hashing,
+region diffing), component layout/measurement/clipping, page/app navigation,
+dirty-region computation (shrink, hide, move, two regions, container
+background, page switch and back, canvas mismatch), the panel refresh policy
+(inclusive windows, region/area thresholds, `uint32` wrap) and the real status
+page (counter ticks and wrap, heartbeat, throttled WiFi polling, exact dirty
+rects, old-pixel erasure, boot-frame hash).
 
-`test_status_page` also pins a golden hash of the boot frame. When a change to
-the UI is intentional, refresh it with:
+`test_status_page` also pins a golden hash of the boot frame. On mismatch it
+writes `test_boot.pgm` plus an ASCII dump (`.gitignore`d) so you can see what
+changed. When a change is intentional:
 
 ```sh
-UPDATE_GOLDEN=1 pio test -e native -f test_status_page -v
+PRINT_GOLDEN=1 pio test -e native -f test_status_page -v   # prints the new hash
 ```
+
+then paste it into `test_boot_frame_golden`. `PRINT_GOLDEN` is ignored when
+`CI` is set, so a CI run can never skip the assertion.
 
 `tools/preview.sh` builds `src/preview/preview_main.cpp` for the host, prints
 the component tree and an ASCII frame, and writes `preview-*.png` for the boot
@@ -139,13 +171,25 @@ state, the counter ticking, the WiFi label and the "full" mode label.
 
 ## Fonts
 
-`src/ui/fonts/` holds `lv_font_conv`-free, generated tables: 1 bpp bitmaps plus
-per-glyph advance/offset, produced from `CozetteVector-nerd.ttf` with printable
-ASCII and `Æ Ø Å æ ø å`.
+`src/ui/fonts/` holds generated tables: 1 bpp bitmaps plus per-glyph
+advance/offset, produced from `CozetteVector-nerd.ttf` with printable ASCII and
+`Æ Ø Å æ ø å`.
 
 ```sh
 python3 tools/gen_fonts.py ../CozetteVector-nerd.ttf src/ui/fonts
 ```
+
+The TTF itself is not tracked here (it lives next to the repo); regeneration
+requires it, and the generated tables are committed so normal builds never need
+it. Expected font SHA-256:
+
+```
+0113c020314250e1e794ccb034103a8da80488ac69ad72bd32d5bfcf8cf5a5f5
+```
+
+The generator asserts that glyph fields fit the C++ types and prints how many
+glyphs overhang their advance (`5` at 16 px, `2` at 96 px today); measurement
+uses the ink extent so those are handled rather than clipped.
 
 New files must be listed in `src/CMakeLists.txt` (the ESP-IDF component lists
 its sources explicitly).
@@ -202,8 +246,26 @@ Partial mode: `0x00 1F; 0x04 (wait); 0x50 29 07; 0xE0 02; 0xE5 58`.
 
 Update protocol: window with `0x50 A9 07`, `0x91`, `0x90 ... 01`, write new
 data to `0x13`, `0x12`, wait, then write the same data to `0x10` as the "old"
-image. Plane polarity is `0x00 = black`, `0xFF = white`. A full refresh writes
-`0x10 = 0xFF`, `0x13 = frame`, then `0x12`.
+image, so the next partial update is driven against what is actually on glass.
+Plane polarity is `0x00 = black`, `0xFF = white`.
+
+A full refresh first pulses RST and re-runs the full init (a partial update
+leaves the controller in partial mode with a small `0x90` window that `0x04`
+does not clear), then writes `0x10 = 0xFF`, `0x13 = frame`, `0x12`, waits, and
+preloads `0x10` with the frame. Every operation returns `false` if a BUSY wait
+times out or an SPI transfer failed.
+
+## WiFi credentials
+
+The station credentials are **not** in git. Copy the example and fill it in:
+
+```sh
+cp src/wifi_credentials.example.hpp src/wifi_credentials.hpp   # gitignored
+```
+
+`src/wifi_seeds.hpp` includes that file when present; without it the firmware
+still builds and runs, logs a warning and simply has no networks to try. The
+bench AP list lives only in your local `wifi_credentials.hpp`.
 
 ## Build and flash
 

@@ -91,18 +91,21 @@ bool Driver::begin() {
   return true;
 }
 
-void Driver::send_raw(const uint8_t *data, size_t len) {
+bool Driver::send_raw(const uint8_t *data, size_t len) {
   if (len == 0) {
-    return;
+    return true;
   }
   spi_transaction_t t = {};
   t.length = len * 8;
   t.tx_buffer = data;
-  esp_err_t err = spi_device_polling_transmit(spi_, &t);
+  const esp_err_t err = spi_device_polling_transmit(spi_, &t);
   if (err != ESP_OK) {
+    tx_failed_ = true;
     ESP_LOGE(TAG, "SPI tx %u B failed: %s", (unsigned)len,
              esp_err_to_name(err));
+    return false;
   }
+  return true;
 }
 
 void Driver::send_cmd(uint8_t cmd) {
@@ -222,6 +225,7 @@ void Driver::init_mode(bool partial) {
 }
 
 bool Driver::reset_and_init(bool partial) {
+  tx_failed_ = false;
   reset_panel();
   init_mode(partial);
   return wait_idle(5000, "init");
@@ -311,6 +315,7 @@ bool Driver::wait_idle(uint32_t timeout_ms, const char *what) {
 
 bool Driver::draw_and_refresh(const uint8_t *frame, int x1_byte, int x2_byte,
                               int y1, int y2) {
+  tx_failed_ = false;
   if (!wait_idle(20000, "pre-draw")) {
     return false;
   }
@@ -322,10 +327,22 @@ bool Driver::draw_and_refresh(const uint8_t *frame, int x1_byte, int x2_byte,
 
   send_cmd(0x12);
   delay_ms(10);
-  return wait_idle(45000, "refresh");
+  if (!wait_idle(45000, "refresh")) {
+    return false;
+  }
+
+  // Preload OLD (0x10) with the image that is now on the glass. The reference
+  // does this in apply_old_buffer(); without it the next partial update is
+  // driven against the boot image and leaves ghosting behind.
+  set_window(x1_byte, x2_byte, y1, y2);
+  start_stream(0x10);
+  write_window(frame, kStride, x1_byte, x2_byte, y1, y2);
+  end_stream();
+  return !tx_failed_;
 }
 
 bool Driver::clear(uint8_t level) {
+  tx_failed_ = false;
   if (!wait_idle(30000, "pre-clear")) {
     return false;
   }
@@ -344,17 +361,23 @@ bool Driver::clear(uint8_t level) {
 
   send_cmd(0x12);
   delay_ms(10);
-  return wait_idle(45000, "clear");
+  return wait_idle(45000, "clear") && !tx_failed_;
 }
 
 bool Driver::full_refresh(const uint8_t *frame) {
+  tx_failed_ = false;
   if (!wait_idle(30000, "pre-full")) {
     return false;
   }
 
+  // A partial update leaves the controller in partial mode with a small 0x90
+  // window. Neither init_mode() nor 0x04 clears that, so a later "full" refresh
+  // would quietly write the frame into the old window. Reset first: this is the
+  // exact sequence that paints the panel correctly at boot.
+  reset_panel();
   init_mode(false);
 
-  // OLD = white, NEW = current frame, full-screen, no partial window.
+  // OLD = white, NEW = current frame, whole screen.
   start_stream(0x10);
   write_fill(0xFF, kFrameBytes);
   end_stream();
@@ -365,9 +388,17 @@ bool Driver::full_refresh(const uint8_t *frame) {
 
   send_cmd(0x12);
   delay_ms(10);
-  const bool ok = wait_idle(45000, "full refresh");
+  if (!wait_idle(45000, "full refresh")) {
+    return false;
+  }
+
+  // OLD must match what is on the glass before the first partial update.
+  start_stream(0x10);
+  write_window(frame, kStride, 0, kStride - 1, 0, kHeight - 1);
+  end_stream();
+
   init_mode(true);
-  return ok;
+  return !tx_failed_;
 }
 
 bool Driver::partial_update(const uint8_t *frame, const Rect &area) {
@@ -386,7 +417,9 @@ bool Driver::partial_update(const uint8_t *frame, const Rect &area) {
   int y1 = area.y1 < 0 ? 0 : area.y1;
   int y2 = area.y2 >= kHeight ? kHeight - 1 : area.y2;
   if (x1b > x2b || y1 > y2) {
-    return true;
+    ESP_LOGE(TAG, "partial: invalid window x=%d..%d y=%d..%d", area.x1,
+             area.x2, area.y1, area.y2);
+    return false;
   }
 
   const bool ok = draw_and_refresh(frame, x1b, x2b, y1, y2);

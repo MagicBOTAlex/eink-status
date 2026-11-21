@@ -39,8 +39,14 @@ uint32_t utf8_next(const char *&cursor);
 uint32_t utf8_next(const std::string &text, size_t &index);
 std::string utf8_encode(uint32_t codepoint);
 
+// Advance sum: how far the pen moves.
 int font_text_width(const Font &font, const std::string &text);
 int font_text_width(const Font &font, const char *text);
+
+// Ink extent: at least the advance sum, but wider when a glyph's bitmap
+// overhangs its advance (Cozette's '4' and 'q' do). Label sizing and text
+// alignment use this so ink is never painted outside the declared box.
+int font_text_ink_width(const Font &font, const std::string &text);
 
 // Number of code points, which is what `font_text_width` iterates over.
 size_t utf8_length(const std::string &text);

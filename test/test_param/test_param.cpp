@@ -13,6 +13,7 @@ const ui::Font *null_font() { return nullptr; }
 } // namespace
 
 void test_param_types_and_getters(void) {
+  const ui::Param unset;
   const ui::Param i(5);
   const ui::Param b(true);
   const ui::Param t("hello");
@@ -22,6 +23,9 @@ void test_param_types_and_getters(void) {
   const ui::Param v(ui::VAlign::Bottom);
   const ui::Param f(null_font());
 
+  TEST_ASSERT_EQUAL_INT((int)ui::ParamType::Unset, (int)unset.type());
+  TEST_ASSERT_TRUE(unset.empty());
+  TEST_ASSERT_EQUAL_STRING("unset", unset.dump().c_str());
   TEST_ASSERT_EQUAL_INT((int)ui::ParamType::Int, (int)i.type());
   TEST_ASSERT_EQUAL_INT((int)ui::ParamType::Bool, (int)b.type());
   TEST_ASSERT_EQUAL_INT((int)ui::ParamType::Text, (int)t.type());
@@ -32,8 +36,8 @@ void test_param_types_and_getters(void) {
   TEST_ASSERT_EQUAL_INT((int)ui::ParamType::Font, (int)f.type());
 
   TEST_ASSERT_EQUAL_INT(5, i.as_int());
-  TEST_ASSERT_EQUAL_INT(5, i.as_int(9));      // fallback unused when set
-  TEST_ASSERT_EQUAL_INT(9, t.as_int(9));      // wrong type -> fallback
+  TEST_ASSERT_EQUAL_INT(5, i.as_int(9)); // fallback unused when set
+  TEST_ASSERT_EQUAL_INT(9, t.as_int(9)); // wrong type -> fallback
   TEST_ASSERT_EQUAL_STRING("hello", t.as_text().c_str());
   TEST_ASSERT_EQUAL_STRING("x", i.as_text("x").c_str());
   TEST_ASSERT_EQUAL_INT((int)ui::Color::White, (int)c.as_color());
@@ -74,8 +78,8 @@ void test_paramset_set_find_remove(void) {
 
 void test_validation_reports_unknown_and_range(void) {
   const std::vector<ui::ParamSpec> specs = {
-      {"x", ui::ParamType::Int, true, ui::Param(), -10, 10},
-      {"text", ui::ParamType::Text, false, ui::Param("")},
+      {"x", ui::ParamType::Int, true, -10, 10},
+      {"text", ui::ParamType::Text, false},
   };
 
   const ui::ParamSet params{{"x", ui::Param(50)}, {"bogus", ui::Param(1)}};
@@ -91,7 +95,7 @@ void test_validation_reports_unknown_and_range(void) {
 
 void test_validation_reports_wrong_type(void) {
   const std::vector<ui::ParamSpec> specs = {
-      {"x", ui::ParamType::Int, true, ui::Param(), -10, 10},
+      {"x", ui::ParamType::Int, true, -10, 10},
   };
   const ui::ParamSet params{{"x", ui::Param("nope")}};
   const std::vector<ui::ParamError> errors = ui::validate_params(params, specs);
@@ -101,8 +105,8 @@ void test_validation_reports_wrong_type(void) {
 
 void test_validation_reports_missing_required(void) {
   const std::vector<ui::ParamSpec> specs = {
-      {"x", ui::ParamType::Int, true, ui::Param(), -10, 10},
-      {"text", ui::ParamType::Text, true, ui::Param()},
+      {"x", ui::ParamType::Int, true, -10, 10},
+      {"text", ui::ParamType::Text, true},
   };
   const std::vector<ui::ParamError> errors =
       ui::validate_params(ui::ParamSet{}, specs);
@@ -113,6 +117,28 @@ void test_validation_reports_missing_required(void) {
   TEST_ASSERT_EQUAL_STRING("text", errors[1].key.c_str());
 }
 
+// A required key that is present but empty is still missing: otherwise a label
+// with Param() as its font validates cleanly and then draws nothing.
+void test_validation_reports_empty_required(void) {
+  const std::vector<ui::ParamSpec> specs = {
+      {"font", ui::ParamType::Font, true},
+  };
+  const ui::ParamSet params{{"font", ui::Param()}};
+  const std::vector<ui::ParamError> errors = ui::validate_params(params, specs);
+  TEST_ASSERT_EQUAL_size_t(1, errors.size());
+  TEST_ASSERT_EQUAL_STRING("font", errors[0].key.c_str());
+  TEST_ASSERT_EQUAL_STRING("missing required parameter",
+                           errors[0].message.c_str());
+
+  // An empty optional value is simply absent, not an error.
+  const std::vector<ui::ParamSpec> optional = {
+      {"color", ui::ParamType::Color, false},
+  };
+  const ui::ParamSet with_empty{{"color", ui::Param()}};
+  TEST_ASSERT_EQUAL_size_t(0,
+                           ui::validate_params(with_empty, optional).size());
+}
+
 int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_param_types_and_getters);
@@ -120,5 +146,6 @@ int main(int, char **) {
   RUN_TEST(test_validation_reports_unknown_and_range);
   RUN_TEST(test_validation_reports_wrong_type);
   RUN_TEST(test_validation_reports_missing_required);
+  RUN_TEST(test_validation_reports_empty_required);
   return UNITY_END();
 }

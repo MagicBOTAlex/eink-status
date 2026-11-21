@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "esp_heap_caps.h"
@@ -9,6 +10,7 @@
 #include "freertos/task.h"
 
 #include "epd.hpp"
+#include "panel_plan.hpp"
 #include "screens/status_page.hpp"
 #include "ui/app.hpp"
 #include "ui/canvas.hpp"
@@ -21,10 +23,11 @@ constexpr const char *TAG = "MAIN";
 
 constexpr uint32_t kLoopPeriodMs = 20;
 constexpr uint32_t kFullRefreshPeriodMs = 120000;
-// A region this large is cheaper to paint with a full-screen refresh, and the
-// full waveform gives the best contrast for a repaint of most of the screen.
-constexpr long kFullRefreshArea = (long)epd::kWidth * epd::kHeight / 2;
+constexpr uint32_t kFullRetryMs = 5000;
 constexpr size_t kMaxPartialRegions = 4;
+// A repaint this large is cheaper as one full-screen refresh, and the full
+// waveform gives better contrast.
+constexpr long kFullRefreshArea = (long)epd::kWidth * epd::kHeight / 2;
 
 epd::Driver g_driver;
 ui::UiApp g_app(app::theme::kWidth, app::theme::kHeight);
@@ -41,7 +44,29 @@ app::WifiInfo read_wifi() {
   return info;
 }
 
-void log_regions(const std::vector<ui::Rect> &regions) {
+// Returns false when the panel did not complete the refresh; the caller then
+// retries instead of pretending the glass is up to date.
+bool full_refresh(const char *why, ui::Canvas &canvas) {
+  ui::Page *page = g_app.current_page();
+  ESP_LOGI(TAG, "full refresh: %s", why);
+
+  if (page != nullptr) {
+    page->on_display_mode(ui::DisplayMode::Full);
+  }
+  // Make sure the frame buffer contains what the page looks like right now.
+  g_app.present(canvas);
+
+  const bool ok = g_driver.full_refresh(g_frame);
+  if (page != nullptr) {
+    page->on_display_mode(ok ? ui::DisplayMode::Partial : ui::DisplayMode::Error);
+  }
+  if (!ok) {
+    ESP_LOGE(TAG, "full refresh failed");
+  }
+  return ok;
+}
+
+void log_dirty(const std::vector<ui::Rect> &regions) {
   if (regions.empty()) {
     return;
   }
@@ -52,13 +77,19 @@ void log_regions(const std::vector<ui::Rect> &regions) {
   ESP_LOGI(TAG, "%s", line.c_str());
 }
 
-bool full_refresh(const char *why, ui::Canvas &canvas, app::StatusPage &page) {
-  ESP_LOGI(TAG, "full refresh: %s", why);
-  page.set_mode("full");
-  g_app.present(canvas);
-  const bool ok = g_driver.full_refresh(g_frame);
-  page.set_mode("partial");
-  return ok;
+bool partial_refresh(const std::vector<ui::Rect> &regions) {
+  for (const ui::Rect &rect : regions) {
+    const panel::Window window = panel::to_window(rect);
+    if (!panel::valid(window)) {
+      ESP_LOGE(TAG, "refusing invalid window for %s", rect.to_string().c_str());
+      return false;
+    }
+    const epd::Rect area{window.x1, window.y1, window.x2, window.y2};
+    if (!g_driver.partial_update(g_frame, area)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 } // namespace
@@ -79,8 +110,11 @@ extern "C" void app_main() {
   canvas.clear(ui::Color::White);
 
   g_app.add_page(std::make_unique<app::StatusPage>(read_wifi));
-  auto *page = static_cast<app::StatusPage *>(g_app.current_page());
   ESP_LOGI(TAG, "ui tree:\n%s", g_app.describe().c_str());
+  for (const auto &issue : g_app.validation_errors()) {
+    ESP_LOGE(TAG, "ui: %s: %s: %s", issue.component.c_str(),
+             issue.error.key.c_str(), issue.error.message.c_str());
+  }
 
   if (!g_driver.begin()) {
     ESP_LOGE(TAG, "EPD driver init failed");
@@ -90,57 +124,63 @@ extern "C" void app_main() {
   ESP_LOGI(TAG, "panel bring-up: PWR high + full init + white clear");
   g_driver.power_output(true);
   vTaskDelay(pdMS_TO_TICKS(300));
-  g_driver.reset_and_init(false);
+  if (!g_driver.reset_and_init(false)) {
+    ESP_LOGE(TAG, "panel init timed out; will retry on the first refresh");
+  }
   if (!g_driver.clear(0xFF)) {
     ESP_LOGE(TAG, "white clear did not complete");
   }
 
-  g_app.tick(now_ms());
-  g_app.present(canvas);
-  ESP_LOGI(TAG, "frame hash=%08x", (unsigned)canvas.hash());
-
-  full_refresh("first frame", canvas, *page);
   netwifi::start();
 
+  bool need_full = true;
+  uint32_t next_full_attempt = 0; // immediate
   uint32_t last_full = now_ms();
-  size_t presented = 0;
+  uint32_t presented = 0;
 
   for (;;) {
     const uint32_t now = now_ms();
     g_app.tick(now);
 
+    if (!g_app.needs_present() && !need_full) {
+      vTaskDelay(pdMS_TO_TICKS(kLoopPeriodMs));
+      continue;
+    }
+
     const bool page_switch = g_app.page_changed();
     const std::vector<ui::Rect> regions = g_app.present(canvas);
 
-    if (page_switch) {
-      full_refresh("page switch", canvas, *page);
-      last_full = now;
-    } else if (!regions.empty()) {
-      long area = 0;
-      for (const ui::Rect &r : regions) {
-        area += r.area();
+    if (need_full) {
+      if (static_cast<int32_t>(now - next_full_attempt) >= 0) {
+        if (full_refresh(page_switch ? "page switch" : "repaint", canvas)) {
+          need_full = false;
+          last_full = now;
+        } else {
+          next_full_attempt = now + kFullRetryMs;
+        }
       }
+    } else if (!regions.empty()) {
+      const panel::Action action =
+          panel::choose(regions, kMaxPartialRegions, kFullRefreshArea);
 
-      if (regions.size() > kMaxPartialRegions || area > kFullRefreshArea) {
-        full_refresh("large dirty area", canvas, *page);
-        last_full = now;
-      } else {
-        log_regions(regions);
-        for (const ui::Rect &r : regions) {
-          const epd::Rect area{r.x, r.y, r.w, r.h};
-          if (!g_driver.partial_update(g_frame, area)) {
-            ESP_LOGW(TAG, "partial failed, resyncing with a full refresh");
-            full_refresh("partial timeout", canvas, *page);
-            last_full = now;
-            break;
-          }
+      if (action == panel::Action::Full) {
+        ESP_LOGI(TAG, "dirty area too large for partial refresh");
+        need_full = true;
+        next_full_attempt = 0;
+      } else if (action == panel::Action::Partial) {
+        log_dirty(regions);
+        if (!partial_refresh(regions)) {
+          ESP_LOGW(TAG, "partial refresh failed; scheduling a full refresh");
+          need_full = true;
+          next_full_attempt = now + kFullRetryMs;
         }
       }
     }
 
-    if (now - last_full >= kFullRefreshPeriodMs) {
-      last_full = now;
-      full_refresh("periodic ghost cleanup", canvas, *page);
+    if (!need_full && panel::due(now, last_full, kFullRefreshPeriodMs)) {
+      need_full = true;
+      next_full_attempt = 0;
+      ESP_LOGI(TAG, "periodic ghost cleanup due");
     }
 
     if ((++presented % 250) == 0) {

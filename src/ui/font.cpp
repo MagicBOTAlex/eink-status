@@ -18,37 +18,48 @@ bool font_has_glyph(const Font &font, uint32_t codepoint) {
 uint32_t utf8_next(const char *&cursor) {
   const auto *p = reinterpret_cast<const unsigned char *>(cursor);
   if (*p == 0) {
-    return 0;
+    return 0; // end of a C string; the caller stops
   }
 
-  uint32_t cp = 0xFFFD;
-  int extra = 0;
-
   if (*p < 0x80) {
-    cp = *p;
-    extra = 0;
-  } else if ((*p & 0xE0) == 0xC0) {
+    ++cursor;
+    return *p;
+  }
+
+  uint32_t cp = 0;
+  int extra = 0;
+  uint32_t minimum = 0;
+
+  if ((*p & 0xE0) == 0xC0) {
     cp = *p & 0x1F;
     extra = 1;
+    minimum = 0x80;
   } else if ((*p & 0xF0) == 0xE0) {
     cp = *p & 0x0F;
     extra = 2;
+    minimum = 0x800;
   } else if ((*p & 0xF8) == 0xF0) {
     cp = *p & 0x07;
     extra = 3;
-  }
-
-  if (extra == 0 && *p >= 0x80) {
+    minimum = 0x10000;
+  } else {
     ++cursor;
     return 0xFFFD;
   }
 
   for (int i = 1; i <= extra; ++i) {
     if ((p[i] & 0xC0) != 0x80) {
-      ++cursor;
+      ++cursor; // truncated or malformed: consume one byte and move on
       return 0xFFFD;
     }
     cp = (cp << 6) | (p[i] & 0x3F);
+  }
+
+  // Overlong encodings, UTF-16 surrogates and values past U+10FFFF are not
+  // characters this renderer can draw.
+  if (cp < minimum || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) {
+    ++cursor;
+    return 0xFFFD;
   }
 
   cursor += 1 + extra;
@@ -56,9 +67,20 @@ uint32_t utf8_next(const char *&cursor) {
 }
 
 uint32_t utf8_next(const std::string &text, size_t &index) {
+  if (index >= text.size()) {
+    index = text.size();
+    return 0;
+  }
+
   const char *p = text.c_str() + index;
   const char *before = p;
   const uint32_t cp = utf8_next(p);
+  if (p == before) {
+    // Embedded NUL (legal in std::string): report a replacement character and
+    // guarantee progress so callers can never spin forever.
+    ++index;
+    return 0xFFFD;
+  }
   index += static_cast<size_t>(p - before);
   if (index > text.size()) {
     index = text.size();
@@ -99,6 +121,26 @@ int font_text_width(const Font &font, const std::string &text) {
 
 int font_text_width(const Font &font, const char *text) {
   return font_text_width(font, std::string(text ? text : ""));
+}
+
+int font_text_ink_width(const Font &font, const std::string &text) {
+  int pen = 0;
+  int right = 0;
+  size_t i = 0;
+  while (i < text.size()) {
+    const uint32_t cp = utf8_next(text, i);
+    const Glyph *glyph = font_glyph(font, cp);
+    if (glyph == nullptr) {
+      pen += font.size / 2;
+      continue;
+    }
+    const int glyph_right = pen + glyph->xoff + glyph->width;
+    if (glyph_right > right) {
+      right = glyph_right;
+    }
+    pen += glyph->advance;
+  }
+  return right > pen ? right : pen;
 }
 
 size_t utf8_length(const std::string &text) {

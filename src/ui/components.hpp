@@ -60,6 +60,8 @@ public:
 
   const char *type_name() const override { return "Rule"; }
 
+  // A rule is one pixel high unless `h` says otherwise.
+  Size measure(const Size &available) const override;
   std::vector<ParamSpec> schema() const override;
 
   static constexpr const char *kColor = "color";

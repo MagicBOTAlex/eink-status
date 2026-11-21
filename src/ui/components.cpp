@@ -10,16 +10,17 @@ Size Label::measure(const Size &) const {
   if (f == nullptr) {
     return {0, 0};
   }
-  return {font_text_width(*f, text()), f->line_height};
+  // Ink extent, not advance sum: a glyph can overhang its advance.
+  return {font_text_ink_width(*f, text()), f->line_height};
 }
 
 std::vector<ParamSpec> Label::schema() const {
   std::vector<ParamSpec> specs = Component::schema();
-  specs.push_back({kText, ParamType::Text, true, Param("")});
-  specs.push_back({kFont, ParamType::Font, true, Param(static_cast<const Font *>(nullptr))});
-  specs.push_back({kColor, ParamType::Color, false, Param(Color::Black)});
-  specs.push_back({kHAlign, ParamType::HAlign, false, Param(HAlign::Left)});
-  specs.push_back({kVAlign, ParamType::VAlign, false, Param(VAlign::Top)});
+  specs.push_back({kText, ParamType::Text, true});
+  specs.push_back({kFont, ParamType::Font, true});
+  specs.push_back({kColor, ParamType::Color, false});
+  specs.push_back({kHAlign, ParamType::HAlign, false});
+  specs.push_back({kVAlign, ParamType::VAlign, false});
   return specs;
 }
 
@@ -38,9 +39,9 @@ Box::Box(std::string id, ParamSet params)
 
 std::vector<ParamSpec> Box::schema() const {
   std::vector<ParamSpec> specs = Component::schema();
-  specs.push_back({kColor, ParamType::Color, false, Param()});
-  specs.push_back({kBorder, ParamType::Int, false, Param(0), 0, 64});
-  specs.push_back({kBorderColor, ParamType::Color, false, Param(Color::Black)});
+  specs.push_back({kColor, ParamType::Color, false});
+  specs.push_back({kBorder, ParamType::Int, false, 0, 64});
+  specs.push_back({kBorderColor, ParamType::Color, false});
   return specs;
 }
 
@@ -64,9 +65,13 @@ void Box::draw_self(Canvas &canvas) const {
 Rule::Rule(std::string id, ParamSet params)
     : Component(std::move(id), std::move(params)) {}
 
+Size Rule::measure(const Size &) const {
+  return {params_.get_int(kW, 0), params_.get_int(kH, 1)};
+}
+
 std::vector<ParamSpec> Rule::schema() const {
   std::vector<ParamSpec> specs = Component::schema();
-  specs.push_back({kColor, ParamType::Color, false, Param(Color::Black)});
+  specs.push_back({kColor, ParamType::Color, false});
   return specs;
 }
 

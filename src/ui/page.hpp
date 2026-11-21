@@ -6,6 +6,10 @@
 
 namespace ui {
 
+// What the panel is doing, published to the current page so it can show state
+// without the driver knowing anything about pages.
+enum class DisplayMode { Partial, Full, Error };
+
 // A named screen. Pages own their component tree and know nothing about the
 // panel, so a page can be rendered into any Canvas: the device's frame buffer,
 // a host test buffer, or the preview tool.
@@ -18,6 +22,9 @@ public:
 
   // The page always covers the whole screen; children are laid out inside it.
   void layout(int width, int height);
+
+  // Called when the panel starts/finishes a full refresh or fails one.
+  virtual void on_display_mode(DisplayMode mode) { (void)mode; }
 
   std::vector<ParamSpec> schema() const override;
 

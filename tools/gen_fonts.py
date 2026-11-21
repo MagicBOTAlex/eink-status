@@ -50,6 +50,12 @@ def generate(ttf: str, size: int, ident: str, symbol: str, out_dir: str) -> None
             blob.extend(data)
         else:
             offset = 0
+        # The renderer stores these in fixed-width fields; fail loudly rather
+        # than emitting a cryptic narrowing error in C++.
+        assert 0 <= w <= 255 and 0 <= h <= 255, "glyph %r is too wide/tall" % ch
+        assert -128 <= ox <= 127 and -128 <= oy <= 127, "glyph %r offset" % ch
+        assert 0 <= advance <= 255, "glyph %r advance" % ch
+        assert len(blob) <= 0xFFFF, "glyph table exceeds 16-bit offsets"
         glyphs.append((ord(ch), w, h, ox, oy, advance, offset))
 
     header = os.path.join(out_dir, ident + ".hpp")
@@ -86,8 +92,12 @@ def generate(ttf: str, size: int, ident: str, symbol: str, out_dir: str) -> None
         f.write("} // namespace ui::fonts\n")
 
     used = sum(1 for g in glyphs if g[1] and g[2])
-    print("%-24s size=%3d glyphs=%3d ink=%3d bytes=%6d -> %s"
-          % (ident, size, len(glyphs), used, len(blob), source))
+    overhang = sum(1 for g in glyphs if g[1] and g[3] + g[1] > g[5])
+    print("%-24s size=%3d glyphs=%3d ink=%3d overhang=%2d bytes=%6d -> %s"
+          % (ident, size, len(glyphs), used, overhang, len(blob), source))
+    if overhang:
+        print("  note: %d glyph(s) paint past their advance; measurement uses "
+              "the ink extent, so this is handled" % overhang)
 
 
 def main() -> int:

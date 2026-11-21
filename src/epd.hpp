@@ -84,11 +84,14 @@ private:
   void send_data(uint8_t data);
   void start_stream(uint8_t cmd);
   void end_stream();
-  void send_raw(const uint8_t *data, size_t len);
+  bool send_raw(const uint8_t *data, size_t len);
 
   spi_device_handle_t spi_ = nullptr;
   uint8_t *dma_buf_ = nullptr;
   bool partial_mode_ = true;
+  // Set when a transfer fails; every public operation reports it so a logged
+  // SPI error cannot be mistaken for a completed refresh.
+  bool tx_failed_ = false;
 };
 
 } // namespace epd

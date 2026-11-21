@@ -8,6 +8,10 @@ Component::Component(std::string id, ParamSet params)
     : id_(std::move(id)), params_(std::move(params)) {}
 
 Component &Component::set(std::string key, Param value) {
+  const Param *existing = params_.find(key);
+  if (existing != nullptr && *existing == value) {
+    return *this; // nothing changed: do not provoke a refresh
+  }
   params_.set(std::move(key), std::move(value));
   ++generation_;
   return *this;
@@ -15,9 +19,16 @@ Component &Component::set(std::string key, Param value) {
 
 Component &Component::set(const ParamSet &values) {
   for (size_t i = 0; i < values.size(); ++i) {
-    params_.set(values.key_at(i), values.value_at(i));
+    set(values.key_at(i), values.value_at(i));
   }
-  ++generation_;
+  return *this;
+}
+
+Component &Component::remove_param(const std::string &key) {
+  if (params_.has(key)) {
+    params_.remove(key);
+    ++generation_;
+  }
   return *this;
 }
 
@@ -72,22 +83,28 @@ void Component::draw(Canvas &canvas) const {
   if (!visible()) {
     return;
   }
+
+  // Clip to our own bounds so nothing can paint outside the area the dirty
+  // tracker knows about.
+  const Rect saved = canvas.clip();
+  canvas.set_clip(saved.intersect(bounds_));
   draw_self(canvas);
   for (const auto &child : children_) {
     child->draw(canvas);
   }
+  canvas.set_clip(saved);
 }
 
 bool Component::add_child(std::unique_ptr<Component>) { return false; }
 
 std::vector<ParamSpec> Component::schema() const {
   return {
-      {kX, ParamType::Int, false, Param(0), -8192, 8192},
-      {kY, ParamType::Int, false, Param(0), -8192, 8192},
-      {kW, ParamType::Int, false, Param(0), 0, 8192},
-      {kH, ParamType::Int, false, Param(0), 0, 8192},
-      {kAnchor, ParamType::Align, false, Param(Align::TopLeft)},
-      {kVisible, ParamType::Bool, false, Param(true)},
+      {kX, ParamType::Int, false, -8192, 8192},
+      {kY, ParamType::Int, false, -8192, 8192},
+      {kW, ParamType::Int, false, 0, 8192},
+      {kH, ParamType::Int, false, 0, 8192},
+      {kAnchor, ParamType::Align, false},
+      {kVisible, ParamType::Bool, false},
   };
 }
 
@@ -120,9 +137,10 @@ std::string Component::describe_tree(int indent) const {
 
 std::vector<ParamSpec> Container::schema() const {
   std::vector<ParamSpec> specs = Component::schema();
-  specs.push_back({kBg, ParamType::Color, false, Param(Color::White)});
-  specs.push_back({kBorder, ParamType::Int, false, Param(0), 0, 64});
-  specs.push_back({kBorderColor, ParamType::Color, false, Param(Color::Black)});
+  // No bg means "transparent" (draw nothing); Page supplies a white default.
+  specs.push_back({kBg, ParamType::Color, false});
+  specs.push_back({kBorder, ParamType::Int, false, 0, 64});
+  specs.push_back({kBorderColor, ParamType::Color, false});
   return specs;
 }
 
@@ -131,6 +149,7 @@ bool Container::add_child(std::unique_ptr<Component> child) {
     return false;
   }
   children_.push_back(std::move(child));
+  ++generation_; // the layout changed
   return true;
 }
 

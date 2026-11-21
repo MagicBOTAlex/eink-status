@@ -92,6 +92,20 @@ StatusPage::StatusPage(WifiSource source)
 
 void StatusPage::set_mode(const std::string &mode) { mode_->set_text(mode); }
 
+void StatusPage::on_display_mode(ui::DisplayMode mode) {
+  switch (mode) {
+  case ui::DisplayMode::Full:
+    set_mode("full");
+    break;
+  case ui::DisplayMode::Partial:
+    set_mode("partial");
+    break;
+  case ui::DisplayMode::Error:
+    set_mode("error");
+    break;
+  }
+}
+
 void StatusPage::update_self(uint32_t now_ms) {
   if (now_ms - last_counter_ms_ >= kCounterPeriodMs) {
     last_counter_ms_ = now_ms;
@@ -107,7 +121,12 @@ void StatusPage::update_self(uint32_t now_ms) {
     tick_->set_color(tick_on_ ? ui::Color::Black : ui::Color::White);
   }
 
-  if (wifi_source_) {
+  // Poll the (mutex-protected) WiFi status at most once a second: the UI loop
+  // runs at 50 Hz and nothing needs fresher state than that.
+  if (wifi_source_ && (!wifi_polled_ || now_ms - last_wifi_ms_ >= 1000)) {
+    wifi_polled_ = true;
+    last_wifi_ms_ = now_ms;
+
     const WifiInfo info = wifi_source_();
     std::string text;
     if (info.connected) {

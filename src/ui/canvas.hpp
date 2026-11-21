@@ -23,6 +23,12 @@ public:
   size_t byte_size() const { return static_cast<size_t>(stride_) * height_; }
   Rect bounds() const { return {0, 0, width_, height_}; }
 
+  // Every drawing call is clipped to this region. Components narrow it to
+  // their own bounds while they draw, so ink can never escape the area the
+  // dirty-region tracker knows about.
+  const Rect &clip() const { return clip_; }
+  void set_clip(const Rect &clip);
+
   void clear(Color color = Color::White);
   void fill_rect(const Rect &rect, Color color);
   void stroke_rect(const Rect &rect, Color color, int thickness = 1);
@@ -34,6 +40,8 @@ public:
                  Color color = Color::Black);
 
   // The box draw_text will paint into: the font line box placed inside `box`.
+  // Width uses the ink extent, which can exceed the advance sum for glyphs
+  // whose bitmap overhangs their advance.
   static Rect text_box(const Font &font, const Rect &box, const std::string &text,
                        HAlign halign, VAlign valign);
 
@@ -57,6 +65,7 @@ private:
   int width_;
   int height_;
   int stride_;
+  Rect clip_;
 };
 
 } // namespace ui

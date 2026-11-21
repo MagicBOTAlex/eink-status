@@ -9,3 +9,6 @@ compile_commands.json
 # Host preview output
 preview-*.pgm
 preview-*.png
+
+# Local WiFi credentials (see src/wifi_credentials.example.hpp)
+src/wifi_credentials.hpp

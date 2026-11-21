@@ -11,7 +11,12 @@ inline uint8_t mask_for(int bit) { return static_cast<uint8_t>(0x80u >> bit); }
 } // namespace
 
 Canvas::Canvas(uint8_t *pixels, int width, int height, int stride)
-    : pixels_(pixels), width_(width), height_(height), stride_(stride) {}
+    : pixels_(pixels), width_(width), height_(height), stride_(stride),
+      clip_{0, 0, width, height} {}
+
+void Canvas::set_clip(const Rect &clip) {
+  clip_ = clip.intersect({0, 0, width_, height_});
+}
 
 void Canvas::clear(Color color) {
   if (color == Color::Invert) {
@@ -24,7 +29,7 @@ void Canvas::clear(Color color) {
 }
 
 void Canvas::plot(int x, int y, Color color) {
-  if (x < 0 || y < 0 || x >= width_ || y >= height_) {
+  if (!clip_.contains(x, y)) {
     return;
   }
   uint8_t *byte = pixels_ + static_cast<size_t>(y) * stride_ + (x >> 3);
@@ -43,7 +48,7 @@ void Canvas::plot(int x, int y, Color color) {
 }
 
 void Canvas::fill_rect(const Rect &rect, Color color) {
-  const Rect b = rect.intersect(bounds());
+  const Rect b = rect.intersect(clip_);
   if (b.empty()) {
     return;
   }
@@ -88,15 +93,25 @@ void Canvas::stroke_rect(const Rect &rect, Color color, int thickness) {
   if (rect.empty() || thickness <= 0) {
     return;
   }
+  // Whole band if the border would cover the rect.
+  if (thickness * 2 >= rect.w || thickness * 2 >= rect.h) {
+    fill_rect(rect, color);
+    return;
+  }
+  // Paint each side exactly once: with Color::Invert, overlapping sides would
+  // cancel out at the corners.
   fill_rect({rect.x, rect.y, rect.w, thickness}, color);
   fill_rect({rect.x, rect.bottom() - thickness, rect.w, thickness}, color);
-  fill_rect({rect.x, rect.y, thickness, rect.h}, color);
-  fill_rect({rect.right() - thickness, rect.y, thickness, rect.h}, color);
+  fill_rect({rect.x, rect.y + thickness, thickness, rect.h - 2 * thickness},
+            color);
+  fill_rect({rect.right() - thickness, rect.y + thickness, thickness,
+             rect.h - 2 * thickness},
+            color);
 }
 
 Rect Canvas::text_box(const Font &font, const Rect &box,
                       const std::string &text, HAlign halign, VAlign valign) {
-  const int tw = font_text_width(font, text);
+  const int tw = font_text_ink_width(font, text);
   const int th = font.line_height;
 
   int x = box.x;

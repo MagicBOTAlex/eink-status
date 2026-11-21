@@ -22,6 +22,9 @@ const char *color_name(Color color) {
 } // namespace
 
 ParamType Param::type() const {
+  if (std::holds_alternative<std::monostate>(value_)) {
+    return ParamType::Unset;
+  }
   if (std::holds_alternative<int>(value_)) {
     return ParamType::Int;
   }
@@ -89,6 +92,8 @@ const Font *Param::as_font() const {
 std::string Param::dump() const {
   char buf[96];
   switch (type()) {
+  case ParamType::Unset:
+    return "unset";
   case ParamType::Int:
     std::snprintf(buf, sizeof(buf), "int(%d)", as_int());
     return buf;
@@ -205,6 +210,8 @@ std::string ParamSet::dump() const {
 
 const char *to_string(ParamType type) {
   switch (type) {
+  case ParamType::Unset:
+    return "unset";
   case ParamType::Int:
     return "int";
   case ParamType::Bool:
@@ -265,7 +272,11 @@ std::vector<ParamError> validate_params(const ParamSet &params,
   }
 
   for (const auto &spec : specs) {
-    if (spec.required && !params.has(spec.name)) {
+    if (!spec.required) {
+      continue;
+    }
+    const Param *value = params.find(spec.name);
+    if (value == nullptr || value->empty()) {
       errors.push_back({spec.name, "missing required parameter"});
     }
   }

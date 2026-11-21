@@ -12,24 +12,12 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
+#include "wifi_seeds.hpp"
 
 namespace netwifi {
 namespace {
 
 constexpr const char *TAG = "WIFI";
-
-struct Credential {
-  const char *ssid;
-  const char *password;
-};
-
-// Both 2.4 GHz APs seen from the bench use the same password. The old
-// reference firmware associated with "boostiest booster"; "Boost Booster" is
-// the name the bench owner gave.
-constexpr Credential kCredentials[] = {
-    {"Boost Booster", "crystalize"},
-    {"boostiest booster", "crystalize"},
-};
 
 constexpr EventBits_t kConnectedBit = BIT0;
 constexpr EventBits_t kDisconnectedBit = BIT1;
@@ -106,7 +94,8 @@ void wifi_task(void *arg) {
     }
 
     bool connected = false;
-    for (const auto &cred : kCredentials) {
+    for (size_t seed_index = 0; seed_index < kSeedCount; ++seed_index) {
+      const Seed &cred = kSeeds[seed_index];
       xEventGroupClearBits(s_events, kConnectedBit | kDisconnectedBit);
 
       wifi_config_t cfg = {};
@@ -180,8 +169,11 @@ void start() {
   ESP_ERROR_CHECK(esp_wifi_start());
 
   xTaskCreate(&wifi_task, "wifi_task", 4096, nullptr, 4, nullptr);
-  ESP_LOGI(TAG, "STA started; %u seed network(s)",
-           (unsigned)(sizeof(kCredentials) / sizeof(kCredentials[0])));
+  ESP_LOGI(TAG, "STA started; %u seed network(s)", (unsigned)kSeedCount);
+  if (kSeedCount == 0) {
+    ESP_LOGW(TAG, "no credentials: copy src/wifi_credentials.example.hpp to "
+                  "src/wifi_credentials.hpp");
+  }
 }
 
 Status get_status() {

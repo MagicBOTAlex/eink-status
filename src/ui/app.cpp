@@ -52,6 +52,12 @@ std::vector<Rect> UiApp::present(Canvas &canvas) {
     return dirty_;
   }
 
+  // A mismatch here would read past the caller's buffer while diffing.
+  if (canvas.width() != width_ || canvas.height() != height_ ||
+      canvas.stride() < previous_stride_) {
+    return dirty_;
+  }
+
   current_->layout(width_, height_);
   current_->draw(canvas);
 
@@ -68,13 +74,15 @@ std::vector<Rect> UiApp::present(Canvas &canvas) {
       const bool params_changed =
           component.generation() != component.presented_generation();
 
-      // Hidden components only matter when their parameters just changed, and
-      // unchanged containers defer to their children, which own the pixels.
-      if (!params_changed && !component.visible()) {
-        return;
-      }
-      if (!params_changed && !component.children().empty()) {
-        return;
+      // An unchanged hidden component has nothing to say. An unchanged
+      // container defers to its children, which own the pixels.
+      if (!params_changed) {
+        if (!component.visible()) {
+          return;
+        }
+        if (!component.children().empty()) {
+          return;
+        }
       }
 
       // A component that shrank or was hidden still owns the pixels it used
@@ -87,10 +95,11 @@ std::vector<Rect> UiApp::present(Canvas &canvas) {
       if (region.empty()) {
         return;
       }
-      if (!params_changed && previous.region_equal(canvas, region)) {
-        return;
+      // Pixels decide. A no-op set(), or a background change hidden behind a
+      // child, must not trigger a refresh.
+      if (!previous.region_equal(canvas, region)) {
+        changed.push_back(region);
       }
-      changed.push_back(region);
     });
     dirty_ = merge_rects(std::move(changed), 8);
   }
@@ -109,6 +118,36 @@ std::vector<Rect> UiApp::present(Canvas &canvas) {
   full_ = false;
   page_changed_ = false;
   return dirty_;
+}
+
+std::vector<UiApp::ValidationIssue> UiApp::validation_errors() const {
+  std::vector<ValidationIssue> issues;
+  for (const auto &page : pages_) {
+    page->layout(width_, height_);
+    page->for_each([&issues](const Component &component) {
+      for (const ParamError &error : component.validate()) {
+        issues.push_back(
+            {std::string(component.type_name()) + "#" + component.id(), error});
+      }
+    });
+  }
+  return issues;
+}
+
+bool UiApp::needs_present() const {
+  if (current_ == nullptr) {
+    return false;
+  }
+  if (full_) {
+    return true;
+  }
+  bool dirty = false;
+  current_->for_each([&](const auto &component) {
+    if (!dirty && component.generation() != component.presented_generation()) {
+      dirty = true;
+    }
+  });
+  return dirty;
 }
 
 std::string UiApp::describe() const {

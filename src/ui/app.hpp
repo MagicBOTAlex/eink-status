@@ -49,6 +49,19 @@ public:
 
   const std::vector<Rect> &dirty() const { return dirty_; }
 
+  // True when the visible tree changed since the last present(), so the device
+  // can skip redrawing an idle screen.
+  bool needs_present() const;
+
+  // Parameter problems in every registered page, computed on demand so
+  // components added after add_page() are still covered. Reported by the device
+  // log; tests assert the list is empty for real pages.
+  struct ValidationIssue {
+    std::string component;
+    ParamError error;
+  };
+  std::vector<ValidationIssue> validation_errors() const;
+
   int width() const { return width_; }
   int height() const { return height_; }
 

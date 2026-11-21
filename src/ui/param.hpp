@@ -14,7 +14,7 @@ namespace ui {
 
 class Font;
 
-enum class ParamType : uint8_t { Int, Bool, Text, Color, Align, HAlign, VAlign, Font };
+enum class ParamType : uint8_t { Unset, Int, Bool, Text, Color, Align, HAlign, VAlign, Font };
 
 // A single component parameter. Components are configured the same way on the
 // device and in tests: a bag of named values that is validated against a
@@ -89,13 +89,13 @@ private:
   std::vector<std::pair<std::string, Param>> items_;
 };
 
-// Declares one accepted parameter. A spec with `required == false` and an
-// empty default simply allows the key to be absent.
+// Declares one accepted parameter and its contract. Components apply their
+// own fallbacks with the ParamSet::get_* accessors, so the schema only states
+// what is accepted, whether it must be present, and the int range.
 struct ParamSpec {
   std::string name;
   ParamType type;
   bool required = false;
-  Param default_value;
   int min = INT_MIN;
   int max = INT_MAX;
 };
@@ -109,9 +109,10 @@ struct ParamError {
   }
 };
 
-// Validates `params` against `specs`: unknown keys, missing required keys,
-// wrong value types and out-of-range ints are reported. The order of the
-// returned errors follows `params`, so tests can assert on it.
+// Validates `params` against `specs`: unknown keys, missing or empty required
+// keys, wrong value types and out-of-range ints are reported. A key holding an
+// unset Param counts as absent. The order follows `params`, with missing
+// required keys appended in schema order, so tests can assert on it.
 std::vector<ParamError> validate_params(const ParamSet &params,
                                         const std::vector<ParamSpec> &specs);
 
