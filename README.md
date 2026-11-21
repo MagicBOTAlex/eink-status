@@ -10,44 +10,30 @@ Barebones PlatformIO + ESP-IDF firmware for a single Good Display
 
 ## Wiring
 
-The panel is a Waveshare 5.83" 10-pin e-paper module. The connector order is:
+This build targets the **9-pin single-panel HAT** (2 power + 7 GPIO). The
+10-pin cable/header belongs to the full dual-screen setup and is not used here.
 
-| Pin | Signal | Notes |
-| --- | --- | --- |
-| 1 | PWR | panel power control (not the 3.3 V supply) |
-| 2 | BUSY | active low |
-| 3 | RST | active low |
-| 4 | DC | command low, data high |
-| 5 | CS_S | slave controller select |
-| 6 | CS_M | master controller select |
-| 7 | SCLK | SPI clock |
-| 8 | DIN | SPI MOSI |
-| 9 | GND | |
-| 10 | VCC | 3.3 V |
-
-**VCC (pin 10) and GND (pin 9) must be connected.** PWR is only a control
-signal; it does not power the panel.
-
-### Direct-GPIO mapping used by this firmware
-
-| Panel | ESP32-S3 |
+| HAT pin | ESP32-S3 |
 | --- | --- |
-| DIN (pin 8) | GPIO9 |
-| SCLK (pin 7) | GPIO7 |
-| CS_M (pin 6) | GPIO2 |
-| DC (pin 4) | GPIO3 |
-| RST (pin 3) | GPIO4 |
-| BUSY (pin 2) | GPIO5 |
-| PWR (pin 1) | GPIO6 |
+| VCC | 3V3 |
+| GND | GND |
+| DIN / MOSI | GPIO9 (D10) |
+| CLK / SCK | GPIO7 (D8) |
+| CS | GPIO2 (D1) |
+| DC | GPIO3 (D2) |
+| RST | GPIO4 (D3) |
+| BUSY | GPIO5 (D4) |
+| PWR | GPIO6 (D5) |
 
-The earlier bench wiring had **CS on pin 5 (CS_S)** and left **CS_M floating**.
-A dual module only refreshes when the master is addressed (and ideally both CS
-lines are driven). Move CS to pin 6, or tie pins 5 and 6 together to GPIO2.
+VCC must be **3.3 V** to match the XIAO logic. PWR is the panel power-enable
+control, not the supply.
 
-The working direct-GPIO half project in the Countr tree
-(`arduino/half_display/working_half`) uses `RST=2, DC=3, CS=4, BUSY=1, PWR=5`
-with `SPI.begin(7, 8, 9)`. That is a different physical header and is another
-valid mapping if the board is wired that way.
+The Seeed XIAO eInk Expansion Board V2 uses a different fixed pinout
+(`RST=D0/GPIO1`, `CS=D1/GPIO2`, `BUSY=D2/GPIO3`, `DC=D3/GPIO4`,
+`SCK=D8/GPIO7`, `MOSI=D10/GPIO9`) and has no PWR GPIO. The working
+direct-GPIO half project in the Countr tree
+(`arduino/half_display/working_half`) similarly uses
+`RST=2, DC=3, CS=4, BUSY=1, PWR=5` with `SPI.begin(7, 8, 9)`.
 
 ## Build
 

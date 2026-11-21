@@ -161,37 +161,63 @@ void Driver::power_high_z() {
 }
 
 void Driver::reset_panel() {
-  // The working direct-GPIO half project uses a short low pulse and a long
-  // settle after release (RST low 1 ms, high 200 ms).
+  // Seeed GFX UC8179 wake/reset timing.
   gpio_set_level(kPinRst, 0);
-  delay_ms(1);
+  delay_ms(10);
   gpio_set_level(kPinRst, 1);
-  delay_ms(200);
+  delay_ms(10);
+  delay_ms(100);
   ESP_LOGI(TAG, "panel reset done, BUSY=%d", busy_level());
 }
 
 void Driver::init_mode(bool partial) {
-  send_cmd(0x00);
-  send_data(0x1F);
-
-  send_cmd(0x04); // power on
-  delay_ms(100);
-
-  send_cmd(0x50);
-  send_data(0x29);
-  send_data(0x07);
-
   if (partial) {
+    // Seeed GFX UC8179 EPD_INIT_PARTIAL()
+    send_cmd(0x00);
+    send_data(0x1F);
+    send_cmd(0x04);
+    delay_ms(100);
+    (void)wait_idle(5000, "init-partial");
     send_cmd(0xE0);
     send_data(0x02);
+    send_cmd(0xE5);
+    send_data(0x6E);
   } else {
-    send_cmd(0x50);
-    send_data(0x21);
+    // Seeed GFX UC8179 EPD_INIT_FULL(). The 0x06 booster soft-start is
+    // required by this HAT and is absent from the Good Display sample.
+    send_cmd(0x01);
     send_data(0x07);
-  }
+    send_data(0x07);
+    send_data(0x3F);
+    send_data(0x3F);
 
-  send_cmd(0xE5);
-  send_data(0x58);
+    send_cmd(0x06);
+    send_data(0x17);
+    send_data(0x17);
+    send_data(0x28);
+    send_data(0x17);
+
+    send_cmd(0x04);
+    delay_ms(100);
+    (void)wait_idle(5000, "init-full");
+
+    send_cmd(0x00);
+    send_data(0x1F);
+
+    send_cmd(0x61);
+    send_data((kWidth >> 8) & 0xFF);
+    send_data(kWidth & 0xFF);
+    send_data((kHeight >> 8) & 0xFF);
+    send_data(kHeight & 0xFF);
+
+    send_cmd(0x15);
+    send_data(0x00);
+    send_cmd(0x50);
+    send_data(0x10);
+    send_data(0x07);
+    send_cmd(0x60);
+    send_data(0x22);
+  }
 
   partial_mode_ = partial;
   ESP_LOGI(TAG, "init mode: %s", partial ? "partial" : "full");
@@ -218,12 +244,12 @@ void Driver::set_window(int x1_byte, int x2_byte, int y1, int y2) {
   send_data(xs >> 8);
   send_data(xs & 0xFF);
   send_data(xe >> 8);
-  send_data(xe & 0xFF);
+  send_data((xe & 0xFF) - 1); // working driver uses an exclusive end
   send_data(ys >> 8);
   send_data(ys & 0xFF);
   send_data(ye >> 8);
-  send_data(ye & 0xFF);
-  send_data(0x01); // PT_SCAN
+  send_data((ye & 0xFF) - 1); // working driver uses an exclusive end
+  send_data(0x01);            // PT_SCAN
 }
 
 void Driver::write_window(const uint8_t *src, int stride, int x1_byte,
@@ -289,20 +315,8 @@ bool Driver::draw_and_refresh(const uint8_t *frame, int x1_byte, int x2_byte,
   end_stream();
 
   send_cmd(0x12);
-  delay_ms(20);
-  if (!wait_idle(45000, "refresh")) {
-    return false;
-  }
-
-  // Preload OLD with the frame just displayed, exactly like the reference's
-  // apply_old_buffer() after its memcpy. The next partial window then has a
-  // valid OLD buffer even if it is a different area.
-  set_window(x1_byte, x2_byte, y1, y2);
-  start_stream(0x10);
-  write_window(frame, kStride, x1_byte, x2_byte, y1, y2);
-  end_stream();
-
-  return true;
+  delay_ms(10);
+  return wait_idle(45000, "refresh");
 }
 
 bool Driver::clear(uint8_t color) {
@@ -312,18 +326,16 @@ bool Driver::clear(uint8_t color) {
 
   init_mode(false);
 
-  set_window(0, kStride - 1, 0, kHeight - 1);
   start_stream(0x10);
   write_fill(color, kFrameBytes);
   end_stream();
 
-  set_window(0, kStride - 1, 0, kHeight - 1);
   start_stream(0x13);
-  write_fill(color, kFrameBytes);
+  write_fill(static_cast<uint8_t>(~color), kFrameBytes);
   end_stream();
 
   send_cmd(0x12);
-  delay_ms(20);
+  delay_ms(10);
   return wait_idle(45000, "clear");
 }
 
@@ -333,7 +345,19 @@ bool Driver::full_refresh(const uint8_t *frame) {
   }
 
   init_mode(false);
-  const bool ok = draw_and_refresh(frame, 0, kStride - 1, 0, kHeight - 1);
+
+  // OLD = white, NEW = current frame, full-screen, no partial window.
+  start_stream(0x10);
+  write_fill(0xFF, kFrameBytes);
+  end_stream();
+
+  start_stream(0x13);
+  write_window(frame, kStride, 0, kStride - 1, 0, kHeight - 1);
+  end_stream();
+
+  send_cmd(0x12);
+  delay_ms(10);
+  const bool ok = wait_idle(45000, "full refresh");
   init_mode(true);
   return ok;
 }
