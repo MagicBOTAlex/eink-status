@@ -26,9 +26,28 @@ Barebones PlatformIO + ESP-IDF firmware for a single Good Display
 pio run
 ```
 
-The build is configured for the XIAO's 8 MB flash / 8 MB PSRAM. Flashing on the
-bench host (`botmain`) uses the USB-JTAG port `/dev/ttyACM0`; see the top-level
-`PROGRESS.md` for the exact esptool invocation used during bring-up.
+The build is configured for the XIAO's 8 MB flash / 8 MB PSRAM.
+
+## Flash (bench)
+
+The board is on `botmain` at `/dev/ttyACM0` (USB-JTAG). `pyserial` is available
+there through Nix:
+
+```sh
+# first flash / partition change
+nix-shell -p python3Packages.pyserial --run \
+  "python3 ~/.platformio/packages/tool-esptoolpy/esptool.py \
+   --chip esp32s3 -p /dev/ttyACM0 -b 460800 \
+   write_flash 0x0 bootloader.bin 0x8000 partitions.bin 0x10000 firmware.bin"
+
+# application-only updates
+nix-shell -p python3Packages.pyserial --run \
+  "python3 ~/.platformio/packages/tool-esptoolpy/esptool.py \
+   --chip esp32s3 -p /dev/ttyACM0 -b 460800 \
+   write_flash 0x10000 firmware.bin"
+```
+
+Serial console: `stty -F /dev/ttyACM0 115200 raw -echo; cat /dev/ttyACM0`.
 
 ## What the display shows
 
