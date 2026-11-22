@@ -19,6 +19,16 @@
         <input id="interval" type="number" min="10" max="3600" required
                class="w-28 border border-neutral-300 px-2 py-1">
       </label>
+      <label class="text-sm">
+        <span class="block mb-1">DNS primary (blank = DHCP)</span>
+        <input id="dnsMain" placeholder="192.168.50.1"
+               class="w-40 border border-neutral-300 px-2 py-1">
+      </label>
+      <label class="text-sm">
+        <span class="block mb-1">DNS secondary</span>
+        <input id="dnsSecondary" placeholder="optional"
+               class="w-40 border border-neutral-300 px-2 py-1">
+      </label>
       <button type="button" id="add"
               class="border border-neutral-300 px-3 py-1 text-sm">+ target</button>
     </div>
@@ -78,6 +88,8 @@
     const targetsEl = document.getElementById("targets");
     const rowTpl = document.getElementById("row");
     const intervalEl = document.getElementById("interval");
+    const dnsMainEl = document.getElementById("dnsMain");
+    const dnsSecondaryEl = document.getElementById("dnsSecondary");
     const resultEl = document.getElementById("result");
     const form = document.getElementById("config");
 
@@ -94,6 +106,8 @@
     function collect() {
       return {
         probe_seconds: Number(intervalEl.value),
+        dns_main: dnsMainEl.value.trim(),
+        dns_secondary: dnsSecondaryEl.value.trim(),
         targets: [...targetsEl.children].map((node) => ({
           kind: node.querySelector('[data-field="kind"]').value,
           label: node.querySelector('[data-field="label"]').value.trim(),
@@ -109,6 +123,8 @@
         const response = await fetch(api);
         const config = await response.json();
         intervalEl.value = config.probe_seconds;
+        dnsMainEl.value = config.dns_main || "";
+        dnsSecondaryEl.value = config.dns_secondary || "";
         targetsEl.innerHTML = "";
         config.targets.forEach(addRow);
         resultEl.textContent = "";
@@ -152,9 +168,11 @@
         const targets = status.known_count
           ? status.up_count + "/" + status.known_count + " up"
           : "starting";
+        const dns = status.dns_main ? "dns " + status.dns_main : "dns dhcp";
         liveEl.textContent =
           (status.wifi_connected ? "wifi " + status.ip : "no wifi") +
-          " · " + targets + " · uptime " + formatDuration(status.uptime_s);
+          " · " + dns + " · " + targets +
+          " · uptime " + formatDuration(status.uptime_s);
       } catch (error) {
         liveEl.textContent = "status unavailable";
       }

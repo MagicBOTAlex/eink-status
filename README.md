@@ -168,9 +168,31 @@ hosts, so the panel reports what it can see, and the device's own counters
 (`power`, `net`) come from `esp_timer`.
 
 Configuration lives in NVS as JSON and is validated in `monitor/config.cpp`
-(max 7 targets, per-kind address rules, unique labels, interval clamped to
-10..3600 s). Defaults: `webui`, `akupunktur`, `ha`, `deprived`, `botserver`,
-`metal`, `botmain`.
+(max 14 targets, per-kind address rules, unique labels, interval clamped to
+10..3600 s). Defaults: `webui`, `akupunktur`, `ha`, `deprived`, `immich`, the
+jelly stack (`qbit`, `theoriarr`, `prowlarr`, `seer`, `jelly`) and the LAN
+pings (`botserver`, `metal`, `botmain`).
+
+### DNS
+
+Resolution uses whatever DHCP advertises, and `/api/status` reports it:
+
+```json
+{"dns_main":"192.168.50.1","dns_secondary":"0.0.0.0"}
+```
+
+A private zone such as `*.deprived.internal` only exists on the LAN resolver,
+so if DHCP ever hands out a public resolver first, those targets fail. The
+config therefore accepts two optional resolvers:
+
+```json
+{"dns_main":"192.168.50.1","dns_secondary":"1.1.1.1"}
+```
+
+They are applied to the STA interface with `esp_netif_set_dns_info()` on the
+next probe round (leave them blank to keep DHCP). Clearing them again takes
+effect on the next reconnect, because lwIP keeps the last servers until DHCP
+re-runs.
 
 ### Configuration web UI
 
@@ -236,7 +258,7 @@ device does a full refresh.
 ## Testing without the panel
 
 ```sh
-pio test -e native      # 107 Unity tests, no hardware
+pio test -e native      # 108 Unity tests, no hardware
 tools/preview.sh        # real pages + the rotated panel frame, PNG + ASCII
 python3 tools/check_sources.py   # component sources match src/CMakeLists.txt
 ```

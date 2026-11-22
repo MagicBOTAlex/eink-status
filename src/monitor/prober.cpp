@@ -8,6 +8,7 @@
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
 #include "esp_log.h"
+#include "esp_netif.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
@@ -80,6 +81,16 @@ bool config_from_json(const char *text, Config &out) {
   const cJSON *seconds = cJSON_GetObjectItemCaseSensitive(root, "probe_seconds");
   out.probe_seconds = cJSON_IsNumber(seconds) ? seconds->valueint : 30;
 
+  const cJSON *dns_main = cJSON_GetObjectItemCaseSensitive(root, "dns_main");
+  const cJSON *dns_secondary =
+      cJSON_GetObjectItemCaseSensitive(root, "dns_secondary");
+  if (cJSON_IsString(dns_main)) {
+    out.dns_main = dns_main->valuestring;
+  }
+  if (cJSON_IsString(dns_secondary)) {
+    out.dns_secondary = dns_secondary->valuestring;
+  }
+
   const cJSON *targets = cJSON_GetObjectItemCaseSensitive(root, "targets");
   if (!cJSON_IsArray(targets)) {
     ok = false;
@@ -103,6 +114,8 @@ std::string config_to_json(const Config &config) {
   cJSON *root = cJSON_CreateObject();
   cJSON_AddNumberToObject(root, "version", config.version);
   cJSON_AddNumberToObject(root, "probe_seconds", config.probe_seconds);
+  cJSON_AddStringToObject(root, "dns_main", config.dns_main.c_str());
+  cJSON_AddStringToObject(root, "dns_secondary", config.dns_secondary.c_str());
   cJSON *targets = cJSON_AddArrayToObject(root, "targets");
   for (int i = 0; i < config.count; ++i) {
     const TargetConfig &target = config.targets[i];
@@ -171,6 +184,57 @@ bool load_config(Config &out) {
     return false;
   }
   return true;
+}
+
+// --- DNS ------------------------------------------------------------------
+
+// A private zone such as .internal lives on the LAN resolver, which may not be
+// the one DHCP advertises. When the config names resolvers, pin them on the STA
+// interface; otherwise leave whatever DHCP gave us alone.
+void apply_dns_override(const Config &config) {
+  if (config.dns_main.empty() && config.dns_secondary.empty()) {
+    return;
+  }
+  esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+  if (netif == nullptr) {
+    return;
+  }
+
+  auto set = [netif](esp_netif_dns_type_t type, const std::string &text) {
+    if (text.empty()) {
+      return;
+    }
+    esp_netif_dns_info_t info = {};
+    info.ip.type = ESP_IPADDR_TYPE_V4;
+    if (esp_netif_str_to_ip4(text.c_str(), &info.ip.u_addr.ip4) != ESP_OK) {
+      return;
+    }
+    if (esp_netif_set_dns_info(netif, type, &info) != ESP_OK) {
+      ESP_LOGW(TAG, "could not set DNS %s", text.c_str());
+    }
+  };
+
+  set(ESP_NETIF_DNS_MAIN, config.dns_main);
+  set(ESP_NETIF_DNS_BACKUP, config.dns_secondary);
+}
+
+void fill_dns(Snapshot &snapshot) {
+  esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+  if (netif == nullptr) {
+    return;
+  }
+
+  esp_netif_dns_info_t info = {};
+  if (esp_netif_get_dns_info(netif, ESP_NETIF_DNS_MAIN, &info) == ESP_OK &&
+      info.ip.type == ESP_IPADDR_TYPE_V4) {
+    esp_ip4addr_ntoa(&info.ip.u_addr.ip4, snapshot.dns_main,
+                     sizeof(snapshot.dns_main));
+  }
+  if (esp_netif_get_dns_info(netif, ESP_NETIF_DNS_BACKUP, &info) == ESP_OK &&
+      info.ip.type == ESP_IPADDR_TYPE_V4) {
+    esp_ip4addr_ntoa(&info.ip.u_addr.ip4, snapshot.dns_secondary,
+                     sizeof(snapshot.dns_secondary));
+  }
 }
 
 // --- probes ---------------------------------------------------------------
@@ -349,6 +413,8 @@ void prober_task(void *) {
     next.wifi_connected = true;
     next.connected_since_ms = wifi.connected_since_ms;
     std::snprintf(next.ip, sizeof(next.ip), "%s", wifi.ip);
+    apply_dns_override(config);
+    fill_dns(next);
 
     for (int i = 0; i < config.count; ++i) {
       const TargetConfig &target = config.targets[i];
@@ -429,6 +495,8 @@ std::string snapshot_json() {
   cJSON *root = cJSON_CreateObject();
   cJSON_AddBoolToObject(root, "wifi_connected", snap.wifi_connected);
   cJSON_AddStringToObject(root, "ip", snap.ip);
+  cJSON_AddStringToObject(root, "dns_main", snap.dns_main);
+  cJSON_AddStringToObject(root, "dns_secondary", snap.dns_secondary);
   cJSON_AddNumberToObject(root, "uptime_s", now / 1000);
   cJSON_AddNumberToObject(
       root, "net_uptime_s",

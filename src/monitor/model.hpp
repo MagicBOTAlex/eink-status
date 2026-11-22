@@ -29,6 +29,9 @@ struct Snapshot {
   bool wifi_connected = false;
   uint32_t connected_since_ms = 0;
   char ip[16] = {};
+  // Resolvers actually in use (DHCP or the config override), for the web UI.
+  char dns_main[16] = {};
+  char dns_secondary[16] = {};
   uint32_t checked_ms = 0;  // last completed round, 0 before the first one
   int up_count = 0;
   int known_count = 0;

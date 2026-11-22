@@ -121,6 +121,26 @@ void test_validate_clamps_interval_and_normalises(void) {
   TEST_ASSERT_FALSE(ping.targets[botserver].expect_ok_body);
 }
 
+void test_dns_override_validation(void) {
+  std::string error;
+
+  monitor::Config config = monitor::default_config();
+  TEST_ASSERT_TRUE(config.dns_main.empty()); // DHCP by default
+
+  config.dns_main = "192.168.50.1";
+  config.dns_secondary = "1.1.1.1";
+  TEST_ASSERT_TRUE(monitor::validate_config(config, error));
+
+  config.dns_main = "192.168.50.999";
+  TEST_ASSERT_FALSE(monitor::validate_config(config, error));
+  TEST_ASSERT_TRUE(error.find("dns primary") != std::string::npos);
+
+  config.dns_main = "";
+  config.dns_secondary = "no";
+  TEST_ASSERT_FALSE(monitor::validate_config(config, error));
+  TEST_ASSERT_TRUE(error.find("dns secondary") != std::string::npos);
+}
+
 void test_valid_address(void) {
   using monitor::Kind;
   TEST_ASSERT_TRUE(monitor::valid_address(Kind::Http, "https://deprived.dev/"));
@@ -203,6 +223,7 @@ int main(int, char **) {
   RUN_TEST(test_default_config_covers_the_bench);
   RUN_TEST(test_validate_rejects_bad_configs);
   RUN_TEST(test_validate_clamps_interval_and_normalises);
+  RUN_TEST(test_dns_override_validation);
   RUN_TEST(test_valid_address);
   RUN_TEST(test_kind_strings);
   RUN_TEST(test_tracker_keeps_streaks);

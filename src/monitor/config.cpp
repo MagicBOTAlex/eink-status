@@ -113,6 +113,15 @@ bool validate_config(Config &config, std::string &error) {
     config.probe_seconds = kMaxProbeSeconds;
   }
 
+  if (!config.dns_main.empty() && !valid_ipv4(config.dns_main)) {
+    error = "dns primary is not an IPv4 address";
+    return false;
+  }
+  if (!config.dns_secondary.empty() && !valid_ipv4(config.dns_secondary)) {
+    error = "dns secondary is not an IPv4 address";
+    return false;
+  }
+
   for (int i = 0; i < config.count; ++i) {
     TargetConfig &target = config.targets[i];
     const std::string index = std::to_string(i + 1);
