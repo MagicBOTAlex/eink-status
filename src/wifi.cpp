@@ -11,6 +11,7 @@
 #include "freertos/event_groups.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
 #include "wifi_seeds.hpp"
 
@@ -25,13 +26,25 @@ constexpr uint32_t kAttemptTimeoutMs = 20000;
 
 EventGroupHandle_t s_events = nullptr;
 SemaphoreHandle_t s_mutex = nullptr;
-Status s_status = {false, "", ""};
+Status s_status = {false, "", "", 0};
+
+uint32_t now_ms() {
+  return static_cast<uint32_t>(esp_timer_get_time() / 1000);
+}
 
 void publish(bool connected, const char *ssid, const char *ip) {
   if (s_mutex != nullptr) {
     xSemaphoreTake(s_mutex, portMAX_DELAY);
   }
+  // Capture the previous state before overwriting it: comparing after the
+  // assignment made the "net up" counter stay at zero forever.
+  const bool was_connected = s_status.connected;
   s_status.connected = connected;
+  if (connected && !was_connected) {
+    s_status.connected_since_ms = now_ms();
+  } else if (!connected) {
+    s_status.connected_since_ms = 0;
+  }
   if (ssid != nullptr) {
     std::snprintf(s_status.ssid, sizeof(s_status.ssid), "%s", ssid);
   }

@@ -7,7 +7,9 @@ Barebones PlatformIO + ESP-IDF firmware for a single Good Display
 - A small object-oriented UI framework (pages, components, parameters) that
   renders 1 bpp straight into the panel's frame buffer. **No LVGL.**
 - Dirty-region partial refreshes and full-screen refreshes.
-- WiFi STA connect only (no network services yet).
+- Network monitor: HTTP health checks, ICMP pings, up/down streaks, and this
+  device's own power/network uptime.
+- Configuration web UI on the device (Tailwind v4), stored in NVS.
 - The same UI code runs on the panel, in host unit tests, and in a host
   preview that writes PNGs, so UI work does not need the hardware.
 
@@ -19,15 +21,42 @@ src/ui/
   param.hpp      Param (typed value) + ParamSet + schema validation
   font.hpp       Font/Glyph tables and UTF-8 decoding
   canvas.hpp     1 bpp drawing surface: fill, stroke, text, blit, diff
+  rotation.hpp   logical frame -> panel frame (90 degree rotation)
   component.hpp  Component base class (params, layout, draw, update)
   components.hpp Label, Box, Rule, Container
   page.hpp       Page = a named Container that covers the screen
   app.hpp        UiApp: page stack + dirty-region computation
-  theme.hpp      fonts, colours, screen size
-  fonts/         generated Cozette tables (16 px, 96 px)
+  theme.hpp      fonts, colours, logical screen size
+  fonts/         generated Cozette tables (16/24/32/96 px)
 src/screens/
-  status_page.hpp/.cpp   the actual screen
+  monitor_page.*   the network monitor (default page)
+  status_page.*    the earlier demo page (kept for page switching)
+src/monitor/
+  model.hpp        targets, streaks, formatting (platform-free)
+  config.hpp       editable target list + validation (platform-free)
+  prober.cpp       HTTP/ICMP probes, NVS config, snapshot publishing
+src/web/
+  server.cpp       esp_http_server routes + JSON API
+  assets.cpp       generated: index.html and app.css
+web/               Tailwind source project (index.html, input.css)
 ```
+
+## Orientation
+
+The panel is **648x480 natively** but is mounted **tall**, so the UI lays out in
+a logical **480x648** canvas and `ui::rotate_canvas()` turns each frame into the
+panel frame just before it is streamed. Dirty regions are rotated with
+`ui::rotated_rect()`, so partial refreshes stay correct.
+
+The direction is one constant in `main.cpp`:
+
+```cpp
+constexpr ui::Rotation kPanelRotation = ui::Rotation::Cw90;
+```
+
+With `Cw90`, the panel reads upright when it is mounted rotated 90 degrees
+counter-clockwise (its native right edge at the top). If the image comes out
+upside down, use `Ccw90`.
 
 Everything above `epd.cpp` is platform-free: no ESP-IDF, no LVGL, no globals.
 That is why the native test and preview builds can link it unchanged.
@@ -116,6 +145,59 @@ refresh per region and falls back to a full refresh when a region is large, too
 many regions changed, a partial update fails, or the 120 s ghost cleanup is due.
 A failed full refresh keeps the panel dirty and retries after 5 s.
 
+### Pages in this firmware
+
+`monitor` (default) is a table of seven targets: name, latency, status chip and
+up/down streak, plus a footer with this device's power and network uptime.
+`status` is the earlier demo page. `UiApp::show_page()` is what a future button
+would call.
+
+### Network monitor
+
+`src/monitor/` probes the configured targets every `probe_seconds` (default 30)
+from a dedicated task:
+
+| kind | check |
+| --- | --- |
+| `http` | GET, 2xx/3xx, optional body match (`{"status":true}` for `/health`) |
+| `ping` | one ICMP echo, latency from the ping profile |
+
+Uptime is **observed uptime**: how long the current up/down streak has lasted
+since this device started watching. There is no remote uptime source for these
+hosts, so the panel reports what it can see, and the device's own counters
+(`power`, `net`) come from `esp_timer`.
+
+Configuration lives in NVS as JSON and is validated in `monitor/config.cpp`
+(max 7 targets, per-kind address rules, unique labels, interval clamped to
+10..3600 s). Defaults: `webui`, `akupunktur`, `ha`, `deprived`, `botserver`,
+`metal`, `botmain`.
+
+### Configuration web UI
+
+The device serves a Tailwind page on port 80:
+
+| route | purpose |
+| --- | --- |
+| `GET /` | the config page (embedded) |
+| `GET /app.css` | built Tailwind CSS (embedded) |
+| `GET /api/config` | current config as JSON |
+| `POST /api/config` | validate, store in NVS, re-probe immediately |
+| `GET /api/status` | live snapshot (latency, streaks, uptime) |
+
+The page is deliberately minimal: it lists targets, lets you add/remove rows
+and edit the interval. Design comes later.
+
+Tailwind v4 lives in `web/`:
+
+```sh
+cd web
+npm install          # once
+npm run build        # tailwind -> web/app.css, then embeds both files
+```
+
+`npm run build` regenerates `src/web/assets.cpp` via `tools/embed_web.py`, so
+the firmware builds without node. `web/app.css` is committed.
+
 ### Adding a screen
 
 ```cpp
@@ -138,10 +220,13 @@ device does a full refresh.
 ## Testing without the panel
 
 ```sh
-pio test -e native      # 77 Unity tests, no hardware
-tools/preview.sh        # renders the real pages to PNG + ASCII
-python3 tools/check_sources.py   # every ui/*.cpp is in src/CMakeLists.txt
+pio test -e native      # 100 Unity tests, no hardware
+tools/preview.sh        # real pages + the rotated panel frame, PNG + ASCII
+python3 tools/check_sources.py   # component sources match src/CMakeLists.txt
 ```
+
+The preview writes `preview-monitor.png` (logical 480x648),
+`preview-panel.png` (what the panel receives) and the demo pages.
 
 The suite covers geometry/anchor math, rect merging, parameter typing and
 schema validation, UTF-8 (including malformed, truncated, overlong and
@@ -298,8 +383,9 @@ which is usually enough to debug a layout change remotely.
 
 ## What the display shows
 
-- "Success" at 96 px Cozette, white background / black text.
-- Counter updated through a partial refresh every 2 s.
-- A 36 x 36 heartbeat square toggling every 7 s.
-- WiFi status (`wifi: <ssid> (<ip>)`) in the bottom-left.
-- A full-screen full-mode refresh every 120 s to clear partial-update ghosting.
+- A seven-row network monitor (status, latency, streak) repainted by partial
+  refreshes when a probe result changes.
+- Header summary (`7/7 up` / `OFFLINE` / `starting`), footer with power and
+  network uptime, IP and probe interval.
+- Configuration at `http://<device-ip>/`.
+- A full-screen full-mode refresh every 15 minutes to clear ghosting.

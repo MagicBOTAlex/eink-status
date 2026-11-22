@@ -19,7 +19,7 @@ import sys
 from PIL import ImageFont
 
 # Cozette is a pixel font; these sizes give integer-ish stems.
-SIZES = [16, 96]
+SIZES = [16, 24, 32, 96]
 
 CHARS = [chr(c) for c in range(0x20, 0x7F)] + list("\u00c6\u00d8\u00c5\u00e6\u00f8\u00e5")
 

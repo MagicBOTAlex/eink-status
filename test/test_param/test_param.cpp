@@ -21,6 +21,7 @@ void test_param_types_and_getters(void) {
   const ui::Param a(ui::Align::Center);
   const ui::Param h(ui::HAlign::Right);
   const ui::Param v(ui::VAlign::Bottom);
+  const ui::Param icon(ui::IconKind::Cross);
   const ui::Param f(null_font());
 
   TEST_ASSERT_EQUAL_INT((int)ui::ParamType::Unset, (int)unset.type());
@@ -33,6 +34,7 @@ void test_param_types_and_getters(void) {
   TEST_ASSERT_EQUAL_INT((int)ui::ParamType::Align, (int)a.type());
   TEST_ASSERT_EQUAL_INT((int)ui::ParamType::HAlign, (int)h.type());
   TEST_ASSERT_EQUAL_INT((int)ui::ParamType::VAlign, (int)v.type());
+  TEST_ASSERT_EQUAL_INT((int)ui::ParamType::Icon, (int)icon.type());
   TEST_ASSERT_EQUAL_INT((int)ui::ParamType::Font, (int)f.type());
 
   TEST_ASSERT_EQUAL_INT(5, i.as_int());
@@ -44,6 +46,7 @@ void test_param_types_and_getters(void) {
   TEST_ASSERT_EQUAL_INT((int)ui::Align::Center, (int)a.as_align());
   TEST_ASSERT_EQUAL_INT((int)ui::HAlign::Right, (int)h.as_halign());
   TEST_ASSERT_EQUAL_INT((int)ui::VAlign::Bottom, (int)v.as_valign());
+  TEST_ASSERT_EQUAL_INT((int)ui::IconKind::Cross, (int)icon.as_icon());
   TEST_ASSERT_NULL(f.as_font());
 
   TEST_ASSERT_EQUAL_STRING("int(5)", i.dump().c_str());
@@ -51,6 +54,7 @@ void test_param_types_and_getters(void) {
   TEST_ASSERT_EQUAL_STRING("bool(true)", b.dump().c_str());
   TEST_ASSERT_EQUAL_STRING("color(white)", c.dump().c_str());
   TEST_ASSERT_EQUAL_STRING("align(center)", a.dump().c_str());
+  TEST_ASSERT_EQUAL_STRING("icon(cross)", icon.dump().c_str());
 }
 
 void test_paramset_set_find_remove(void) {

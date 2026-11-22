@@ -53,6 +53,34 @@ protected:
   void draw_self(Canvas &canvas) const override;
 };
 
+// Vector status icon: check, cross or dash, drawn with thick lines so it reads
+// at 28-44 px where text is thin.
+class Icon : public Component {
+public:
+  Icon(std::string id, ParamSet params);
+
+  const char *type_name() const override { return "Icon"; }
+
+  IconKind kind() const {
+    return params_.get_icon(kIcon, IconKind::Check);
+  }
+  Icon &set_icon(IconKind icon) {
+    return static_cast<Icon &>(set(kIcon, Param(icon)));
+  }
+
+  std::vector<ParamSpec> schema() const override;
+
+  static constexpr const char *kIcon = "icon";
+  static constexpr const char *kColor = "color";
+  static constexpr const char *kThickness = "thickness";
+
+protected:
+  void draw_self(Canvas &canvas) const override;
+
+private:
+  Rect icon_area() const;
+};
+
 // Horizontal rule: a one-pixel-high box by default.
 class Rule : public Component {
 public:

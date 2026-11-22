@@ -62,6 +62,65 @@ void Box::draw_self(Canvas &canvas) const {
   }
 }
 
+Icon::Icon(std::string id, ParamSet params)
+    : Component(std::move(id), std::move(params)) {}
+
+std::vector<ParamSpec> Icon::schema() const {
+  std::vector<ParamSpec> specs = Component::schema();
+  specs.push_back({kIcon, ParamType::Icon, true});
+  specs.push_back({kColor, ParamType::Color, false});
+  specs.push_back({kThickness, ParamType::Int, false, 1, 64});
+  return specs;
+}
+
+Rect Icon::icon_area() const {
+  const int side = bounds_.w < bounds_.h ? bounds_.w : bounds_.h;
+  const int margin = side / 8;
+  const int size = side - 2 * margin;
+  return {bounds_.x + (bounds_.w - size) / 2,
+          bounds_.y + (bounds_.h - size) / 2, size, size};
+}
+
+void Icon::draw_self(Canvas &canvas) const {
+  const Rect area = icon_area();
+  if (area.w < 4 || area.h < 4) {
+    return;
+  }
+
+  const Color color = params_.get_color(kColor, Color::Black);
+  int thickness = params_.get_int(kThickness, 0);
+  if (thickness <= 0) {
+    thickness = area.w / 6;
+  }
+  if (thickness < 1) {
+    thickness = 1;
+  }
+
+  const int x = area.x;
+  const int y = area.y;
+  const int w = area.w;
+  const int h = area.h;
+
+  switch (kind()) {
+  case IconKind::Check:
+    canvas.line(x + w / 8, y + h * 5 / 8, x + w * 2 / 5, y + h * 7 / 8, color,
+                thickness);
+    canvas.line(x + w * 2 / 5, y + h * 7 / 8, x + w * 7 / 8, y + h / 8, color,
+                thickness);
+    break;
+  case IconKind::Cross:
+    canvas.line(x + w / 6, y + h / 6, x + w * 5 / 6, y + h * 5 / 6, color,
+                thickness);
+    canvas.line(x + w * 5 / 6, y + h / 6, x + w / 6, y + h * 5 / 6, color,
+                thickness);
+    break;
+  case IconKind::Dash:
+    canvas.line(x + w / 5, y + h / 2, x + w * 4 / 5, y + h / 2, color,
+                thickness);
+    break;
+  }
+}
+
 Rule::Rule(std::string id, ParamSet params)
     : Component(std::move(id), std::move(params)) {}
 

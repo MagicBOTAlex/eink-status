@@ -109,6 +109,35 @@ void Canvas::stroke_rect(const Rect &rect, Color color, int thickness) {
             color);
 }
 
+void Canvas::line(int x0, int y0, int x1, int y1, Color color, int thickness) {
+  if (thickness < 1) {
+    thickness = 1;
+  }
+  const int radius = thickness / 2;
+
+  int dx = std::abs(x1 - x0);
+  const int sx = x0 < x1 ? 1 : -1;
+  int dy = -std::abs(y1 - y0);
+  const int sy = y0 < y1 ? 1 : -1;
+  int error = dx + dy;
+
+  while (true) {
+    fill_rect({x0 - radius, y0 - radius, thickness, thickness}, color);
+    if (x0 == x1 && y0 == y1) {
+      break;
+    }
+    const int e2 = 2 * error;
+    if (e2 >= dy) {
+      error += dy;
+      x0 += sx;
+    }
+    if (e2 <= dx) {
+      error += dx;
+      y0 += sy;
+    }
+  }
+}
+
 Rect Canvas::text_box(const Font &font, const Rect &box,
                       const std::string &text, HAlign halign, VAlign valign) {
   const int tw = font_text_ink_width(font, text);

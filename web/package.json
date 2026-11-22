@@ -1,0 +1,13 @@
+{
+  "name": "eink-status-webui",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "tailwindcss -i src/input.css -o app.css --minify && python3 ../tools/embed_web.py",
+    "watch": "tailwindcss -i src/input.css -o app.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.3.5",
+    "tailwindcss": "^4.3.5"
+  }
+}

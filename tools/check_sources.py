@@ -16,11 +16,13 @@ import sys
 def main() -> int:
     root = pathlib.Path(__file__).resolve().parent.parent
     cmake = (root / "src/CMakeLists.txt").read_text()
-    listed = set(re.findall(r'"((?:ui|screens)/[^"]+\.cpp)"', cmake))
+    listed = set(
+        re.findall(r'"((?:ui|screens|monitor|web)/[^"]+\.cpp)"', cmake))
 
     found = {
         str(p.relative_to(root / "src"))
-        for pattern in ("ui/**/*.cpp", "screens/**/*.cpp")
+        for pattern in ("ui/**/*.cpp", "screens/**/*.cpp", "monitor/*.cpp",
+                        "web/*.cpp")
         for p in (root / "src").glob(pattern)
     }
 
@@ -34,7 +36,7 @@ def main() -> int:
 
     if missing or stale:
         return 1
-    print("src/CMakeLists.txt lists all %d UI sources" % len(found))
+    print("src/CMakeLists.txt lists all %d component sources" % len(found))
     return 0
 
 

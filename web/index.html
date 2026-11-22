@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>eink-status</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body class="p-6 max-w-4xl mx-auto text-neutral-900 bg-neutral-50">
+  <h1 class="text-2xl font-semibold">eink-status</h1>
+  <p class="mt-1 mb-6 text-sm text-neutral-600">
+    Monitor targets. Saved to NVS; the next probe uses the new list.
+  </p>
+
+  <form id="config" class="space-y-4">
+    <div class="flex items-end gap-3">
+      <label class="text-sm">
+        <span class="block mb-1">Probe interval (s)</span>
+        <input id="interval" type="number" min="10" max="3600" required
+               class="w-28 border border-neutral-300 px-2 py-1">
+      </label>
+      <button type="button" id="add"
+              class="border border-neutral-300 px-3 py-1 text-sm">+ target</button>
+    </div>
+
+    <div id="targets" class="space-y-2"></div>
+
+    <div class="flex items-center gap-3">
+      <button type="submit"
+              class="border border-neutral-900 bg-neutral-900 px-4 py-1.5 text-sm text-white">
+        Save
+      </button>
+      <span id="result" class="text-sm text-neutral-600"></span>
+    </div>
+  </form>
+
+  <template id="row">
+    <div class="flex flex-wrap items-center gap-2 border border-neutral-300 bg-white p-2">
+      <select data-field="kind" class="border border-neutral-300 px-1 py-1 text-sm">
+        <option value="http">http</option>
+        <option value="ping">ping</option>
+      </select>
+      <input data-field="label" placeholder="label" maxlength="16"
+             class="w-32 border border-neutral-300 px-2 py-1 text-sm">
+      <input data-field="address" placeholder="https://example/ or 192.168.1.1"
+             maxlength="96" class="min-w-72 flex-1 border border-neutral-300 px-2 py-1 text-sm">
+      <label class="flex items-center gap-1 text-xs text-neutral-600">
+        <input data-field="expect_ok_body" type="checkbox"> expect ok body
+      </label>
+      <button type="button" data-action="remove"
+              class="border border-neutral-300 px-2 py-1 text-sm">×</button>
+    </div>
+  </template>
+
+  <script>
+    const api = "/api/config";
+    const targetsEl = document.getElementById("targets");
+    const rowTpl = document.getElementById("row");
+    const intervalEl = document.getElementById("interval");
+    const resultEl = document.getElementById("result");
+    const form = document.getElementById("config");
+
+    function addRow(target = { kind: "http", label: "", address: "", expect_ok_body: false }) {
+      const node = rowTpl.content.firstElementChild.cloneNode(true);
+      node.querySelector('[data-field="kind"]').value = target.kind;
+      node.querySelector('[data-field="label"]').value = target.label;
+      node.querySelector('[data-field="address"]').value = target.address;
+      node.querySelector('[data-field="expect_ok_body"]').checked = !!target.expect_ok_body;
+      node.querySelector('[data-action="remove"]').onclick = () => node.remove();
+      targetsEl.appendChild(node);
+    }
+
+    function collect() {
+      return {
+        probe_seconds: Number(intervalEl.value),
+        targets: [...targetsEl.children].map((node) => ({
+          kind: node.querySelector('[data-field="kind"]').value,
+          label: node.querySelector('[data-field="label"]').value.trim(),
+          address: node.querySelector('[data-field="address"]').value.trim(),
+          expect_ok_body: node.querySelector('[data-field="expect_ok_body"]').checked,
+        })),
+      };
+    }
+
+    async function load() {
+      resultEl.textContent = "loading…";
+      try {
+        const response = await fetch(api);
+        const config = await response.json();
+        intervalEl.value = config.probe_seconds;
+        targetsEl.innerHTML = "";
+        config.targets.forEach(addRow);
+        resultEl.textContent = "";
+      } catch (error) {
+        resultEl.textContent = "could not load config: " + error;
+      }
+    }
+
+    document.getElementById("add").onclick = () => addRow();
+
+    form.onsubmit = async (event) => {
+      event.preventDefault();
+      resultEl.textContent = "saving…";
+      try {
+        const response = await fetch(api, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(collect()),
+        });
+        const answer = await response.json();
+        resultEl.textContent = answer.ok ? "saved" : "error: " + answer.error;
+        if (answer.ok) await load();
+      } catch (error) {
+        resultEl.textContent = "could not save: " + error;
+      }
+    };
+
+    load();
+  </script>
+</body>
+</html>

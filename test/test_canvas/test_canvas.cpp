@@ -205,6 +205,38 @@ void test_clip_limits_drawing(void) {
   s.canvas.set_clip(s.canvas.bounds());
 }
 
+void test_line(void) {
+  Surface s;
+  s.canvas.line(2, 2, 12, 2, ui::Color::Black, 1);
+  TEST_ASSERT_TRUE(s.canvas.test(2, 2));
+  TEST_ASSERT_TRUE(s.canvas.test(7, 2));
+  TEST_ASSERT_TRUE(s.canvas.test(12, 2));
+  TEST_ASSERT_FALSE(s.canvas.test(13, 2));
+  TEST_ASSERT_EQUAL_INT(11, black_pixels(s.canvas, s.canvas.bounds()));
+
+  // Thickness 3 is a 3 px brush around the centre line.
+  s.canvas.clear(ui::Color::White);
+  s.canvas.line(6, 2, 6, 8, ui::Color::Black, 3);
+  TEST_ASSERT_TRUE(s.canvas.test(5, 5));
+  TEST_ASSERT_TRUE(s.canvas.test(6, 5));
+  TEST_ASSERT_TRUE(s.canvas.test(7, 5));
+  TEST_ASSERT_FALSE(s.canvas.test(8, 5));
+
+  // Diagonal, and clipped at the canvas edge.
+  s.canvas.clear(ui::Color::White);
+  s.canvas.line(0, 0, 9, 9, ui::Color::Black, 1);
+  TEST_ASSERT_TRUE(s.canvas.test(0, 0));
+  TEST_ASSERT_TRUE(s.canvas.test(5, 5));
+  TEST_ASSERT_TRUE(s.canvas.test(9, 9));
+  TEST_ASSERT_FALSE(s.canvas.test(9, 8));
+
+  s.canvas.clear(ui::Color::White);
+  s.canvas.line(-5, 3, 5, 3, ui::Color::Black, 1); // starts off-canvas
+  TEST_ASSERT_TRUE(s.canvas.test(0, 3));
+  TEST_ASSERT_TRUE(s.canvas.test(5, 3));
+  TEST_ASSERT_EQUAL_INT(6, black_pixels(s.canvas, s.canvas.bounds()));
+}
+
 void test_blit_multibyte_glyph(void) {
   Surface s;
   // 9 px wide, MSB-first, stride 2: the second byte contributes one pixel.
@@ -244,6 +276,7 @@ int main(int, char **) {
   RUN_TEST(test_text_alignment);
   RUN_TEST(test_text_clips_at_edges);
   RUN_TEST(test_clip_limits_drawing);
+  RUN_TEST(test_line);
   RUN_TEST(test_blit_multibyte_glyph);
   RUN_TEST(test_region_equal);
   RUN_TEST(test_to_ascii);

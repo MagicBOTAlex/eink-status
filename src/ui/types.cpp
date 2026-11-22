@@ -129,6 +129,34 @@ const char *to_string(VAlign align) {
   return "top";
 }
 
+const char *to_string(IconKind icon) {
+  switch (icon) {
+  case IconKind::Check:
+    return "check";
+  case IconKind::Cross:
+    return "cross";
+  case IconKind::Dash:
+    return "dash";
+  }
+  return "check";
+}
+
+bool icon_from_string(const std::string &text, IconKind *out) {
+  if (text == "check") {
+    *out = IconKind::Check;
+    return true;
+  }
+  if (text == "cross") {
+    *out = IconKind::Cross;
+    return true;
+  }
+  if (text == "dash") {
+    *out = IconKind::Dash;
+    return true;
+  }
+  return false;
+}
+
 bool align_from_string(const std::string &text, Align *out) {
   static const Align values[] = {
       Align::TopLeft,     Align::TopCenter,     Align::TopRight,

@@ -25,6 +25,10 @@ enum class Align : uint8_t {
 enum class HAlign : uint8_t { Left, Center, Right };
 enum class VAlign : uint8_t { Top, Middle, Bottom };
 
+// Vector icons drawn with Canvas::line, so they stay bold at small sizes where
+// the 16-32 px text fonts only manage 1-2 px stems.
+enum class IconKind : uint8_t { Check, Cross, Dash };
+
 struct Point {
   int x = 0;
   int y = 0;
@@ -86,9 +90,11 @@ Rect anchor_rect(const Rect &parent, Size size, Align align, int dx = 0,
 const char *to_string(Align align);
 const char *to_string(HAlign align);
 const char *to_string(VAlign align);
+const char *to_string(IconKind icon);
 bool align_from_string(const std::string &text, Align *out);
 bool halign_from_string(const std::string &text, HAlign *out);
 bool valign_from_string(const std::string &text, VAlign *out);
+bool icon_from_string(const std::string &text, IconKind *out);
 
 // Merges rects that overlap or are closer than `gap` pixels, dropping empty
 // ones. The result is sorted top-to-bottom then left-to-right so refresh order

@@ -14,7 +14,7 @@ namespace ui {
 
 class Font;
 
-enum class ParamType : uint8_t { Unset, Int, Bool, Text, Color, Align, HAlign, VAlign, Font };
+enum class ParamType : uint8_t { Unset, Int, Bool, Text, Color, Align, HAlign, VAlign, Icon, Font };
 
 // A single component parameter. Components are configured the same way on the
 // device and in tests: a bag of named values that is validated against a
@@ -22,7 +22,7 @@ enum class ParamType : uint8_t { Unset, Int, Bool, Text, Color, Align, HAlign, V
 class Param {
 public:
   using Value = std::variant<std::monostate, int, bool, std::string, Color,
-                             Align, HAlign, VAlign, const Font *>;
+                             Align, HAlign, VAlign, IconKind, const Font *>;
 
   Param() = default;
   Param(int value) : value_(value) {}
@@ -33,6 +33,7 @@ public:
   Param(Align value) : value_(value) {}
   Param(HAlign value) : value_(value) {}
   Param(VAlign value) : value_(value) {}
+  Param(IconKind value) : value_(value) {}
   Param(const Font *value) : value_(value) {}
 
   bool empty() const { return std::holds_alternative<std::monostate>(value_); }
@@ -46,6 +47,7 @@ public:
   Align as_align(Align fallback = Align::TopLeft) const;
   HAlign as_halign(HAlign fallback = HAlign::Left) const;
   VAlign as_valign(VAlign fallback = VAlign::Top) const;
+  IconKind as_icon(IconKind fallback = IconKind::Check) const;
   const Font *as_font() const;
 
   // Human-readable form used by logs and test failures, e.g. int(12),
@@ -77,6 +79,7 @@ public:
   Align get_align(const std::string &key, Align fallback = Align::TopLeft) const;
   HAlign get_halign(const std::string &key, HAlign fallback = HAlign::Left) const;
   VAlign get_valign(const std::string &key, VAlign fallback = VAlign::Top) const;
+  IconKind get_icon(const std::string &key, IconKind fallback = IconKind::Check) const;
   const Font *get_font(const std::string &key) const;
 
   size_t size() const { return items_.size(); }

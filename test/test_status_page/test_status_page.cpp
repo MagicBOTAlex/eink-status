@@ -150,7 +150,6 @@ void test_counter_dirty_rect_is_exact(void) {
   const std::vector<ui::Rect> dirty = h.app.present(h.canvas);
   TEST_ASSERT_EQUAL_size_t(1, dirty.size());
   TEST_ASSERT_TRUE(dirty[0] == h.page->counter_label().bounds());
-  TEST_ASSERT_TRUE(dirty[0] == (ui::Rect{284, 275, 80, 20}));
 }
 
 void test_mode_label_change_erases_the_old_text(void) {
@@ -158,12 +157,13 @@ void test_mode_label_change_erases_the_old_text(void) {
   h.app.tick(0);
   h.app.present(h.canvas);
 
-  // Find a pixel that "partial" inks but "full" will not cover.
+  // "partial" is wider than "full" and right-aligned, so its leftmost glyphs
+  // are painted only by the old text. Find one of those pixels first.
   const ui::Rect mode = h.page->mode_label().bounds();
   int ink_x = -1;
   int ink_y = -1;
   for (int y = mode.y; y < mode.bottom() && ink_y < 0; ++y) {
-    for (int x = mode.x; x < 604 && ink_x < 0; ++x) {
+    for (int x = mode.x; x < mode.x + 16 && ink_x < 0; ++x) {
       if (h.canvas.test(x, y)) {
         ink_x = x;
         ink_y = y;
@@ -230,10 +230,10 @@ void test_boot_frame_golden(void) {
     return;
   }
 
-  if (hash != 0x05A65D51u) {
+  if (hash != 0x9AC86309u) {
     write_artifact(h.canvas);
   }
-  TEST_ASSERT_EQUAL_HEX32(0x05A65D51u, hash);
+  TEST_ASSERT_EQUAL_HEX32(0x9AC86309u, hash);
 }
 
 int main(int, char **) {

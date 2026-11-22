@@ -152,6 +152,63 @@ void test_box_fill_and_border(void) {
   TEST_ASSERT_EQUAL_INT(20, black_pixels(canvas));
 }
 
+void test_icon_shapes(void) {
+  // Own square surface: the page canvas is only 40x20 and would clip the icon.
+  constexpr int side = 48;
+  constexpr int stride = (side + 7) / 8;
+  constexpr int icon_size = 40;
+  std::vector<uint8_t> bytes(stride * side, 0xFF);
+  ui::Canvas canvas(bytes.data(), side, side, stride);
+  canvas.clear(ui::Color::White);
+
+  auto draw = [&](ui::IconKind kind) {
+    canvas.clear(ui::Color::White);
+    ui::Icon icon("icon", {{ui::Icon::kIcon, ui::Param(kind)},
+                           {ui::Component::kW, ui::Param(icon_size)},
+                           {ui::Component::kH, ui::Param(icon_size)}});
+    icon.layout({0, 0, side, side});
+    icon.draw(canvas);
+  };
+
+  auto any_ink = [&](int x0, int y0, int x1, int y1) {
+    for (int y = y0; y < y1; ++y) {
+      for (int x = x0; x < x1; ++x) {
+        if (canvas.test(x, y)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  // Check: ink in the lower-left and upper-right, none in the lower-right.
+  draw(ui::IconKind::Check);
+  TEST_ASSERT_TRUE(any_ink(4, 18, 20, 34));
+  TEST_ASSERT_TRUE(any_ink(20, 4, 36, 20));
+  TEST_ASSERT_FALSE(any_ink(28, 28, 38, 38));
+
+  // Cross: all four corners carry ink.
+  draw(ui::IconKind::Cross);
+  TEST_ASSERT_TRUE(any_ink(4, 4, 18, 18));
+  TEST_ASSERT_TRUE(any_ink(22, 4, 36, 18));
+  TEST_ASSERT_TRUE(any_ink(4, 22, 18, 36));
+  TEST_ASSERT_TRUE(any_ink(22, 22, 36, 36));
+
+  // Dash: only the middle band.
+  draw(ui::IconKind::Dash);
+  TEST_ASSERT_TRUE(any_ink(8, 18, 32, 22));
+  TEST_ASSERT_FALSE(any_ink(0, 0, 40, 15));
+  TEST_ASSERT_FALSE(any_ink(0, 25, 40, 40));
+}
+
+void test_icon_unknown_kind_is_rejected(void) {
+  ui::Icon icon("icon", {{ui::Icon::kIcon, ui::Param("check")}});
+  const std::vector<ui::ParamError> errors = icon.validate();
+  TEST_ASSERT_EQUAL_size_t(1, errors.size());
+  TEST_ASSERT_EQUAL_STRING("expected icon, got text",
+                           errors[0].message.c_str());
+}
+
 void test_generation_only_changes_on_real_changes(void) {
   ui::Label label("l", label_params("AB"));
   const uint32_t base = label.generation();
@@ -247,6 +304,8 @@ int main(int, char **) {
   RUN_TEST(test_draw_is_clipped_to_bounds);
   RUN_TEST(test_rule_is_one_pixel_high_by_default);
   RUN_TEST(test_box_fill_and_border);
+  RUN_TEST(test_icon_shapes);
+  RUN_TEST(test_icon_unknown_kind_is_rejected);
   RUN_TEST(test_generation_only_changes_on_real_changes);
   RUN_TEST(test_validate_reports_unknown_and_missing);
   RUN_TEST(test_container_layout_and_children);

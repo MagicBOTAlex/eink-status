@@ -10,11 +10,15 @@
 #include "freertos/task.h"
 
 #include "epd.hpp"
+#include "monitor/prober.hpp"
 #include "panel_plan.hpp"
+#include "screens/monitor_page.hpp"
 #include "screens/status_page.hpp"
 #include "ui/app.hpp"
 #include "ui/canvas.hpp"
+#include "ui/rotation.hpp"
 #include "ui/theme.hpp"
+#include "web/server.hpp"
 #include "wifi.hpp"
 
 namespace {
@@ -22,16 +26,26 @@ namespace {
 constexpr const char *TAG = "MAIN";
 
 constexpr uint32_t kLoopPeriodMs = 20;
-constexpr uint32_t kFullRefreshPeriodMs = 120000;
+// The monitor repaints small regions often; a full flash every 15 minutes is
+// enough to keep the panel free of ghosting.
+constexpr uint32_t kFullRefreshPeriodMs = 15 * 60 * 1000;
 constexpr uint32_t kFullRetryMs = 5000;
 constexpr size_t kMaxPartialRegions = 4;
 // A repaint this large is cheaper as one full-screen refresh, and the full
 // waveform gives better contrast.
 constexpr long kFullRefreshArea = (long)epd::kWidth * epd::kHeight / 2;
 
+// The panel is mounted sideways: lay the UI out in 480x648 and rotate it into
+// the panel's native 648x480 frame. Flip to Ccw90 if the image comes out
+// upside down.
+constexpr ui::Rotation kPanelRotation = ui::Rotation::Cw90;
+
+constexpr int kLogicalStride = (app::theme::kWidth + 7) / 8;
+
 epd::Driver g_driver;
 ui::UiApp g_app(app::theme::kWidth, app::theme::kHeight);
-uint8_t *g_frame = nullptr;
+ui::Canvas *g_logical = nullptr;
+ui::Canvas *g_panel = nullptr;
 
 uint32_t now_ms() { return static_cast<uint32_t>(esp_timer_get_time() / 1000); }
 
@@ -44,9 +58,16 @@ app::WifiInfo read_wifi() {
   return info;
 }
 
+// Rotates the freshly drawn logical frame into the panel buffer.
+void sync_panel() {
+  if (g_logical != nullptr && g_panel != nullptr) {
+    ui::rotate_canvas(*g_logical, *g_panel, kPanelRotation);
+  }
+}
+
 // Returns false when the panel did not complete the refresh; the caller then
 // retries instead of pretending the glass is up to date.
-bool full_refresh(const char *why, ui::Canvas &canvas) {
+bool full_refresh(const char *why) {
   ui::Page *page = g_app.current_page();
   ESP_LOGI(TAG, "full refresh: %s", why);
 
@@ -54,9 +75,10 @@ bool full_refresh(const char *why, ui::Canvas &canvas) {
     page->on_display_mode(ui::DisplayMode::Full);
   }
   // Make sure the frame buffer contains what the page looks like right now.
-  g_app.present(canvas);
+  g_app.present(*g_logical);
+  sync_panel();
 
-  const bool ok = g_driver.full_refresh(g_frame);
+  const bool ok = g_driver.full_refresh(g_panel->pixels());
   if (page != nullptr) {
     page->on_display_mode(ok ? ui::DisplayMode::Partial : ui::DisplayMode::Error);
   }
@@ -78,14 +100,18 @@ void log_dirty(const std::vector<ui::Rect> &regions) {
 }
 
 bool partial_refresh(const std::vector<ui::Rect> &regions) {
+  const ui::Size logical{app::theme::kWidth, app::theme::kHeight};
+
   for (const ui::Rect &rect : regions) {
-    const panel::Window window = panel::to_window(rect);
+    const ui::Rect panel_rect = ui::rotated_rect(rect, logical, kPanelRotation);
+    const panel::Window window = panel::to_window(panel_rect);
     if (!panel::valid(window)) {
-      ESP_LOGE(TAG, "refusing invalid window for %s", rect.to_string().c_str());
+      ESP_LOGE(TAG, "refusing invalid window for %s",
+               panel_rect.to_string().c_str());
       return false;
     }
     const epd::Rect area{window.x1, window.y1, window.x2, window.y2};
-    if (!g_driver.partial_update(g_frame, area)) {
+    if (!g_driver.partial_update(g_panel->pixels(), area)) {
       return false;
     }
   }
@@ -100,16 +126,30 @@ extern "C" void app_main() {
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
            (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
-  g_frame = static_cast<uint8_t *>(
+  uint8_t *logical_bytes = static_cast<uint8_t *>(heap_caps_calloc(
+      1, static_cast<size_t>(kLogicalStride) * app::theme::kHeight,
+      MALLOC_CAP_SPIRAM));
+  uint8_t *panel_bytes = static_cast<uint8_t *>(
       heap_caps_calloc(1, epd::kFrameBytes, MALLOC_CAP_SPIRAM));
-  if (g_frame == nullptr) {
+  if (logical_bytes == nullptr || panel_bytes == nullptr) {
     ESP_LOGE(TAG, "frame buffer allocation failed");
     return;
   }
-  ui::Canvas canvas(g_frame, epd::kWidth, epd::kHeight, epd::kStride);
-  canvas.clear(ui::Color::White);
 
+  ui::Canvas logical_canvas(logical_bytes, app::theme::kWidth,
+                            app::theme::kHeight, kLogicalStride);
+  ui::Canvas panel_canvas(panel_bytes, epd::kWidth, epd::kHeight, epd::kStride);
+  logical_canvas.clear(ui::Color::White);
+  panel_canvas.clear(ui::Color::White);
+  g_logical = &logical_canvas;
+  g_panel = &panel_canvas;
+
+  // The monitor is the default screen; the old status page stays registered
+  // so page switching has somewhere to go once there is an input device.
+  g_app.add_page(std::make_unique<app::MonitorPage>(monitor::snapshot));
   g_app.add_page(std::make_unique<app::StatusPage>(read_wifi));
+  g_app.show_page("monitor");
+
   ESP_LOGI(TAG, "ui tree:\n%s", g_app.describe().c_str());
   for (const auto &issue : g_app.validation_errors()) {
     ESP_LOGE(TAG, "ui: %s: %s: %s", issue.component.c_str(),
@@ -132,6 +172,8 @@ extern "C" void app_main() {
   }
 
   netwifi::start();
+  monitor::start();
+  web::start();
 
   bool need_full = true;
   uint32_t next_full_attempt = 0; // immediate
@@ -148,11 +190,12 @@ extern "C" void app_main() {
     }
 
     const bool page_switch = g_app.page_changed();
-    const std::vector<ui::Rect> regions = g_app.present(canvas);
+    const std::vector<ui::Rect> regions = g_app.present(*g_logical);
+    sync_panel();
 
     if (need_full) {
       if (static_cast<int32_t>(now - next_full_attempt) >= 0) {
-        if (full_refresh(page_switch ? "page switch" : "repaint", canvas)) {
+        if (full_refresh(page_switch ? "page switch" : "repaint")) {
           need_full = false;
           last_full = now;
         } else {

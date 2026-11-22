@@ -83,6 +83,12 @@ void test_align_strings(void) {
   ui::VAlign v = ui::VAlign::Top;
   TEST_ASSERT_TRUE(ui::valign_from_string("middle", &v));
   TEST_ASSERT_EQUAL_INT((int)ui::VAlign::Middle, (int)v);
+
+  ui::IconKind icon = ui::IconKind::Check;
+  TEST_ASSERT_TRUE(ui::icon_from_string("cross", &icon));
+  TEST_ASSERT_EQUAL_INT((int)ui::IconKind::Cross, (int)icon);
+  TEST_ASSERT_EQUAL_STRING("cross", ui::to_string(ui::IconKind::Cross));
+  TEST_ASSERT_FALSE(ui::icon_from_string("tick", nullptr));
 }
 
 int main(int, char **) {

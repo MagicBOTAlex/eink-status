@@ -46,6 +46,9 @@ ParamType Param::type() const {
   if (std::holds_alternative<VAlign>(value_)) {
     return ParamType::VAlign;
   }
+  if (std::holds_alternative<IconKind>(value_)) {
+    return ParamType::Icon;
+  }
   return ParamType::Font;
 }
 
@@ -84,6 +87,11 @@ VAlign Param::as_valign(VAlign fallback) const {
   return p ? *p : fallback;
 }
 
+IconKind Param::as_icon(IconKind fallback) const {
+  const IconKind *p = std::get_if<IconKind>(&value_);
+  return p ? *p : fallback;
+}
+
 const Font *Param::as_font() const {
   const Font *const *p = std::get_if<const Font *>(&value_);
   return p ? *p : nullptr;
@@ -109,6 +117,8 @@ std::string Param::dump() const {
     return std::string("halign(") + to_string(as_halign()) + ")";
   case ParamType::VAlign:
     return std::string("valign(") + to_string(as_valign()) + ")";
+  case ParamType::Icon:
+    return std::string("icon(") + to_string(as_icon()) + ")";
   case ParamType::Font:
     return std::string("font(") + (as_font() ? as_font()->name : "null") + ")";
   }
@@ -189,6 +199,11 @@ VAlign ParamSet::get_valign(const std::string &key, VAlign fallback) const {
   return p ? p->as_valign(fallback) : fallback;
 }
 
+IconKind ParamSet::get_icon(const std::string &key, IconKind fallback) const {
+  const Param *p = find(key);
+  return p ? p->as_icon(fallback) : fallback;
+}
+
 const Font *ParamSet::get_font(const std::string &key) const {
   const Param *p = find(key);
   return p ? p->as_font() : nullptr;
@@ -226,6 +241,8 @@ const char *to_string(ParamType type) {
     return "halign";
   case ParamType::VAlign:
     return "valign";
+  case ParamType::Icon:
+    return "icon";
   case ParamType::Font:
     return "font";
   }

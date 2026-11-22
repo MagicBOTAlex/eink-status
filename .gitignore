@@ -12,3 +12,6 @@ preview-*.png
 
 # Local WiFi credentials (see src/wifi_credentials.example.hpp)
 src/wifi_credentials.hpp
+
+# Golden-test failure artifact
+test_boot.pgm

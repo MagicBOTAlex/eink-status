@@ -33,6 +33,10 @@ public:
   void fill_rect(const Rect &rect, Color color);
   void stroke_rect(const Rect &rect, Color color, int thickness = 1);
 
+  // Bresenham line with a square brush, clipped to the canvas and clip rect.
+  // Used by vector icons so they stay bold at small sizes.
+  void line(int x0, int y0, int x1, int y1, Color color, int thickness = 1);
+
   // Draws `text` inside `box`, aligned horizontally by `halign` and vertically
   // by `valign` using the font's line box. Glyphs are clipped to the canvas.
   void draw_text(const Font &font, const Rect &box, const std::string &text,
