@@ -15,3 +15,6 @@ src/wifi_credentials.hpp
 
 # Golden-test failure artifact
 test_boot.pgm
+
+# Python bytecode from the OTA tools
+__pycache__/

@@ -10,6 +10,8 @@ Barebones PlatformIO + ESP-IDF firmware for a single Good Display
 - Network monitor: HTTP health checks, ICMP pings, up/down streaks, and this
   device's own power/network uptime.
 - Configuration web UI on the device (Tailwind v4), stored in NVS.
+- Resumable, chunked firmware updates over WiFi **and** BLE, with two OTA
+  slots so either transport can replace the running image.
 - The same UI code runs on the panel, in host unit tests, and in a host
   preview that writes PNGs, so UI work does not need the hardware.
 
@@ -38,6 +40,10 @@ src/monitor/
 src/web/
   server.cpp       esp_http_server routes + JSON API
   assets.cpp       generated: index.html and app.css
+src/ota/
+  session.hpp      platform-free offset/erase/resume state machine
+  engine.cpp       flash writes, SHA-256, NVS, boot-slot selection
+  ble.cpp          NimBLE GATT transport (independent of WiFi)
 web/               Tailwind source project (index.html, input.css)
 ```
 
@@ -236,6 +242,112 @@ npm run build        # tailwind -> web/app.css, then embeds both files
 `npm run build` regenerates `src/web/assets.cpp` via `tools/embed_web.py`, so
 the firmware builds without node. `web/app.css` is committed.
 
+### Firmware updates (WiFi + BLE)
+
+The flash table has **two 3 MB application slots** (`partitions.csv`):
+
+| partition | offset | size | role |
+| --- | --- | --- | --- |
+| `ota_0` | `0x10000` | 3 MB | application slot A |
+| `ota_1` | `0x310000` | 3 MB | application slot B |
+| `otadata` | `0xD000` | 8 KB | which slot the bootloader runs |
+
+A successful upload selects the **other** slot and only then touches
+`otadata`, so a dropped upload cannot affect the running firmware.
+
+There are two independent transports into one resumable session:
+
+- **WiFi**: `POST /api/ota/chunk`, 16 KiB chunks, SHA-256 in `begin`.
+- **BLE**: custom GATT service (NimBLE), 509-byte writes at MTU 512. It starts
+  even when WiFi never associates.
+
+Because both feed the same engine, an upload started over WiFi can be finished
+over BLE (or the reverse), including after a reboot. Neither transport depends
+on the other's code path; only the four flash operations are shared.
+
+#### Resumability
+
+The engine keeps `{state, total, offset, target, sha256}` in NVS namespace
+`ota`:
+
+- Chunks are appended at an explicit HTTP offset or at the session cursor over
+  BLE. A chunk whose offset does not match gets HTTP 409 / an ATT status
+  notification carrying the device's real offset.
+- The offset is committed to NVS at most every 8 KiB (plus on every state
+  change). After a crash/reboot the client may be told to resend up to one
+  chunk; rewriting identical bytes is harmless.
+- Flash is erased lazily, one 4 KiB sector ahead of the write cursor. A resume
+  starts erasing at the next sector after the stored offset.
+- `begin` resumes when size and SHA-256 match the stored active session;
+  a different image, or `restart=true`, starts at 0.
+- `finish` requires the full image, reads the slot back and verifies the
+  SHA-256, then calls `esp_ota_set_boot_partition()` (which also validates the
+  ESP image header/checksum) and marks the session `done`.
+
+#### HTTP API
+
+| route | purpose |
+| --- | --- |
+| `GET /api/ota` | state, offset, total, capacity, partition, running slot, SHA, error, BLE info |
+| `POST /api/ota/begin` | `{"size":N,"sha256":"64 hex","restart":false}` → `{"ok":true,"offset":N}` |
+| `POST /api/ota/chunk` | raw body ≤ 16 KiB, header `X-OTA-Offset: N` → `{"ok":true,"offset":N}`; 409 carries the current offset |
+| `POST /api/ota/finish` | verify + select for next boot → `{"partition":"ota_1","reboot_required":true}` |
+| `POST /api/ota/abort` | discard the session |
+
+The web page computes SHA-256 in JavaScript (plain HTTP is not a secure
+context, so `crypto.subtle` is unavailable), resumes automatically when the
+selected file matches an interrupted session, retries dropped chunks by asking
+the device for its offset, and offers a reboot after verification.
+
+Command-line routes:
+
+```sh
+# WiFi: chunked, resumable, asks GET /api/ota where to continue
+python3 tools/ota_push.py .pio/build/xiao/firmware.bin \
+    --host http://192.168.50.7 --reboot
+
+# BLE: same file, independent of WiFi
+nix-shell -p python3Packages.bleak --run \
+  "python3 tools/ota_ble.py .pio/build/xiao/firmware.bin --reboot"
+```
+
+Both scripts compute the SHA-256 locally. Interrupt either one at 40 % and run
+it again: it prints the device's stored offset and continues.
+
+#### BLE GATT protocol
+
+The device advertises as **`eink-status-ota`** (scan response also carries the
+service UUID). UUIDs share the base `e1a70000-6f7a-4b3a-9c1e-2f5d8c0b000N`:
+
+| UUID | properties | purpose |
+| --- | --- | --- |
+| `…0001` | primary service | OTA service |
+| `…0002` | write, write-no-response | control opcodes |
+| `…0003` | write, write-no-response | raw image chunks |
+| `…0004` | read, notify | JSON status; 9-byte progress notifications |
+
+Control opcodes:
+
+| byte | payload | meaning |
+| --- | --- | --- |
+| `0x01` | `u32 total`, `u8 flags` (bit0 restart) | set pending image size |
+| `0x02` | ASCII hex SHA fragments | accumulate the 64-char SHA-256 |
+| `0x03` | — | begin/resume with the accumulated size + hash |
+| `0x04` | — | finish (verify + select) |
+| `0x05` | — | abort |
+| `0x06` | — | notify status |
+| `0x07` | — | reboot, only when the session is `done` |
+
+Data writes append at the device's current offset; the ATT write fails (or the
+next status shows a different offset) if a chunk was lost, and the client
+resumes from there. Notifications are `[state, offset u32 LE, total u32 LE]`
+so they fit any ATT MTU; the status characteristic read returns JSON with the
+SHA, partition and error text.
+
+**Security:** BLE OTA is unauthenticated, like the HTTP UI. Anyone in radio
+range can flash the panel. That is acceptable for a bench device on a private
+network, but do not deploy it that way without pairing or a signed image.
+
 ### Adding a screen
 
 ```cpp
@@ -258,7 +370,7 @@ device does a full refresh.
 ## Testing without the panel
 
 ```sh
-pio test -e native      # 108 Unity tests, no hardware
+pio test -e native      # 119 Unity tests, no hardware
 tools/preview.sh        # real pages + the rotated panel frame, PNG + ASCII
 python3 tools/check_sources.py   # component sources match src/CMakeLists.txt
 ```
@@ -397,10 +509,16 @@ bench AP list lives only in your local `wifi_credentials.hpp`.
 pio run -e xiao
 ```
 
-The build is configured for the XIAO's 8 MB flash / 8 MB PSRAM.
+The build is configured for the XIAO's 8 MB flash / 8 MB PSRAM. BLE is enabled
+through `sdkconfig.defaults`; `sdkconfig.xiao` is generated and gitignored. If
+you are upgrading a checkout created before the OTA change, delete
+`sdkconfig.xiao` once so it is regenerated with NimBLE enabled (otherwise the
+firmware builds with the BLE transport stubbed out).
 
-The board is on `botmain` at `/dev/ttyACM0` (USB-JTAG). `pyserial` is available
-there through Nix:
+The board is on `botmain` at `/dev/ttyACM0` (USB-JTAG). The OTA layout added
+`partitions.csv` entries, so the first USB flash after that change must include
+`partitions.bin`; application-only and OTA updates do not. `pyserial` is
+available there through Nix:
 
 ```sh
 # first flash / partition change
@@ -409,12 +527,21 @@ nix-shell -p python3Packages.pyserial --run \
    --chip esp32s3 -p /dev/ttyACM0 -b 460800 \
    write_flash 0x0 bootloader.bin 0x8000 partitions.bin 0x10000 firmware.bin"
 
-# application-only updates
+# application-only updates (writes ota_0; the bootloader keeps its selection)
 nix-shell -p python3Packages.pyserial --run \
   "python3 ~/.platformio/packages/tool-esptoolpy/esptool.py \
    --chip esp32s3 -p /dev/ttyACM0 -b 460800 \
    write_flash 0x10000 firmware.bin"
+
+# USB recovery: force the bootloader back to ota_0 after an OTA
+nix-shell -p python3Packages.pyserial --run \
+  "python3 ~/.platformio/packages/tool-esptoolpy/esptool.py \
+   --chip esp32s3 -p /dev/ttyACM0 -b 460800 \
+   erase_region 0xd000 0x2000"
 ```
+
+OTA updates themselves need no USB and no host computer; they use the HTTP API
+or the BLE service and then reboot into the other slot.
 
 Serial console: `stty -F /dev/ttyACM0 115200 raw -echo; cat /dev/ttyACM0`.
 The boot log prints the component tree, the frame hash and every dirty region,
@@ -422,7 +549,7 @@ which is usually enough to debug a layout change remotely.
 
 ## What the display shows
 
-- A seven-row network monitor (status, latency, streak) repainted by partial
+- A 13-row network monitor (status, latency, streak) repainted by partial
   refreshes when a probe result changes.
 - Header summary (`7/7 up` / `OFFLINE` / `starting`), footer with power and
   network uptime, IP and probe interval.

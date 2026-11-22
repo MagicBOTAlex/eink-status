@@ -12,6 +12,9 @@ set(UI_SRCS
     "ui/param.cpp"
     "ui/rotation.cpp"
     "control/commands.cpp"
+    "ota/session.cpp"
+    "ota/engine.cpp"
+    "ota/ble.cpp"
     "ui/types.cpp"
     "screens/status_page.cpp"
     "screens/monitor_page.cpp"
@@ -26,4 +29,5 @@ idf_component_register(
     INCLUDE_DIRS "."
     PRIV_REQUIRES driver esp_wifi nvs_flash esp_event esp_netif
                   esp_http_client esp-tls esp_http_server json lwip esp_timer
+                  app_update mbedtls bt
 )

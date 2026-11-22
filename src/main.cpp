@@ -13,6 +13,8 @@
 #include "control/commands.hpp"
 #include "epd.hpp"
 #include "monitor/prober.hpp"
+#include "ota/ble.hpp"
+#include "ota/engine.hpp"
 #include "panel_plan.hpp"
 #include "screens/monitor_page.hpp"
 #include "screens/status_page.hpp"
@@ -174,6 +176,10 @@ extern "C" void app_main() {
   }
 
   netwifi::start();
+  // NVS is ready after netwifi::start(), so an interrupted OTA session can be
+  // picked up before either transport comes online.
+  ota::init();
+  ota::ble::start();
   monitor::start();
   web::start();
 
@@ -197,6 +203,9 @@ extern "C" void app_main() {
         break;
       case control::Action::Reboot:
         ESP_LOGW(TAG, "reboot requested from the web UI");
+        // Give the HTTP handler time to flush its response before the radio
+        // and the rest of the system go down.
+        vTaskDelay(pdMS_TO_TICKS(200));
         esp_restart();
         break;
       case control::Action::ShowPage:

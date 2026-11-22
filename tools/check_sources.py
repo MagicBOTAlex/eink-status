@@ -17,12 +17,12 @@ def main() -> int:
     root = pathlib.Path(__file__).resolve().parent.parent
     cmake = (root / "src/CMakeLists.txt").read_text()
     listed = set(
-        re.findall(r'"((?:ui|screens|monitor|web|control)/[^"]+\.cpp)"', cmake))
+        re.findall(r'"((?:ui|screens|monitor|web|control|ota)/[^"]+\.cpp)"', cmake))
 
     found = {
         str(p.relative_to(root / "src"))
         for pattern in ("ui/**/*.cpp", "screens/**/*.cpp", "monitor/*.cpp",
-                        "web/*.cpp", "control/*.cpp")
+                        "web/*.cpp", "control/*.cpp", "ota/*.cpp")
         for p in (root / "src").glob(pattern)
     }
 

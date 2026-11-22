@@ -45,6 +45,47 @@
   </form>
 
   <section class="mt-10 border-t border-neutral-300 pt-6">
+    <h2 class="text-lg font-semibold">Firmware update</h2>
+    <p class="mt-1 text-sm text-neutral-600">
+      Chunked and resumable over WiFi or BLE. Both routes write the same
+      session, so an upload started over WiFi can be finished over BLE (or the
+      reverse) after a dropped connection or reboot.
+    </p>
+    <p id="ota-state" class="mt-3 text-sm text-neutral-700">loading update status…</p>
+    <div class="mt-3 flex flex-wrap items-end gap-3">
+      <label class="text-sm">
+        <span class="block mb-1">Firmware image (.bin)</span>
+        <input id="ota-file" type="file" accept=".bin,application/octet-stream"
+               class="block text-sm">
+      </label>
+      <label class="flex items-center gap-1 text-xs text-neutral-600">
+        <input id="ota-restart" type="checkbox"> restart from zero
+      </label>
+      <button type="button" id="ota-upload"
+              class="border border-neutral-900 bg-neutral-900 px-4 py-1.5 text-sm text-white">
+        Upload / resume
+      </button>
+      <button type="button" id="ota-abort"
+              class="border border-neutral-300 px-3 py-1.5 text-sm">Abort</button>
+    </div>
+    <div class="mt-3 h-2 w-full bg-neutral-200">
+      <div id="ota-bar" class="h-2 bg-neutral-900" style="width:0%"></div>
+    </div>
+    <p id="ota-progress" class="mt-1 text-xs text-neutral-600"></p>
+    <p id="ota-result" class="mt-2 text-sm text-neutral-600"></p>
+    <div class="mt-5 border border-neutral-300 bg-white p-3 text-xs text-neutral-700">
+      <p class="font-semibold">BLE route</p>
+      <p id="ble-state" class="mt-1">loading…</p>
+      <p class="mt-2 font-mono break-all" id="ble-uuids"></p>
+      <p class="mt-2 text-neutral-500">
+        Use <span class="font-mono">tools/ota_ble.py</span> (needs
+        <span class="font-mono">bleak</span>): the same file resumes from the
+        offset shown above.
+      </p>
+    </div>
+  </section>
+
+  <section class="mt-10 border-t border-neutral-300 pt-6">
     <h2 class="text-lg font-semibold">Control</h2>
     <p class="mt-1 text-sm text-neutral-600">
       Immediate actions. The panel also redraws on every probe.
@@ -198,6 +239,264 @@
     document.querySelectorAll("[data-action]").forEach((button) => {
       button.onclick = () => control(button.dataset.action, button.dataset.page);
     });
+
+    // --- firmware update -------------------------------------------------
+    const otaStateEl = document.getElementById("ota-state");
+    const otaFileEl = document.getElementById("ota-file");
+    const otaRestartEl = document.getElementById("ota-restart");
+    const otaUploadEl = document.getElementById("ota-upload");
+    const otaAbortEl = document.getElementById("ota-abort");
+    const otaBarEl = document.getElementById("ota-bar");
+    const otaProgressEl = document.getElementById("ota-progress");
+    const otaResultEl = document.getElementById("ota-result");
+    const bleStateEl = document.getElementById("ble-state");
+    const bleUuidsEl = document.getElementById("ble-uuids");
+
+    const sha256K = new Uint32Array([
+      0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+      0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+      0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+      0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+      0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+      0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+      0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+      0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+    ]);
+
+    // Plain HTTP is not a secure context, so crypto.subtle is unavailable on
+    // the panel's own page. This is a small synchronous SHA-256 instead.
+    function sha256Hex(bytes) {
+      const padded = new Uint8Array(((((bytes.length + 8) >> 6) + 1) << 6));
+      padded.set(bytes);
+      padded[bytes.length] = 0x80;
+      const view = new DataView(padded.buffer);
+      const bits = bytes.length * 8;
+      view.setUint32(padded.length - 8, Math.floor(bits / 0x100000000), false);
+      view.setUint32(padded.length - 4, bits >>> 0, false);
+
+      const h = new Uint32Array([
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+        0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+      ]);
+      const w = new Uint32Array(64);
+      const rotr = (x, n) => (x >>> n) | (x << (32 - n));
+
+      for (let off = 0; off < padded.length; off += 64) {
+        for (let i = 0; i < 16; i++) w[i] = view.getUint32(off + i * 4, false);
+        for (let i = 16; i < 64; i++) {
+          const s0 = rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >>> 3);
+          const s1 = rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >>> 10);
+          w[i] = (w[i - 16] + s0 + w[i - 7] + s1) >>> 0;
+        }
+
+        let a = h[0], b = h[1], c = h[2], d = h[3];
+        let e = h[4], f = h[5], g = h[6], k = h[7];
+        for (let i = 0; i < 64; i++) {
+          const s1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+          const ch = (e & f) ^ (~e & g);
+          const t1 = (k + s1 + ch + sha256K[i] + w[i]) >>> 0;
+          const s0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+          const maj = (a & b) ^ (a & c) ^ (b & c);
+          const t2 = (s0 + maj) >>> 0;
+          k = g; g = f; f = e; e = (d + t1) >>> 0;
+          d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+        }
+        h[0] = (h[0] + a) >>> 0; h[1] = (h[1] + b) >>> 0;
+        h[2] = (h[2] + c) >>> 0; h[3] = (h[3] + d) >>> 0;
+        h[4] = (h[4] + e) >>> 0; h[5] = (h[5] + f) >>> 0;
+        h[6] = (h[6] + g) >>> 0; h[7] = (h[7] + k) >>> 0;
+      }
+      return [...h].map((x) => x.toString(16).padStart(8, "0")).join("");
+    }
+
+    function formatBytes(n) {
+      if (n < 1024) return n + " B";
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KiB";
+      return (n / 1024 / 1024).toFixed(2) + " MiB";
+    }
+
+    let uploading = false;
+
+    async function otaStatus() {
+      const response = await fetch("/api/ota", { cache: "no-store" });
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      return response.json();
+    }
+
+    async function postJson(path, payload) {
+      const response = await fetch(path, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload || {}),
+      });
+      const answer = await response.json().catch(() => ({ ok: false, error: "bad response" }));
+      if (!response.ok || !answer.ok) {
+        const error = new Error(answer.error || ("HTTP " + response.status));
+        error.offset = answer.offset;
+        error.status = response.status;
+        throw error;
+      }
+      return answer;
+    }
+
+    function showProgress(offset, total) {
+      const pct = total ? Math.min(100, Math.round((offset / total) * 100)) : 0;
+      otaBarEl.style.width = pct + "%";
+      otaProgressEl.textContent =
+        formatBytes(offset) + " / " + formatBytes(total) + " (" + pct + "%)";
+    }
+
+    function renderOta(status) {
+      const pct = status.total ? Math.round((status.offset / status.total) * 100) : 0;
+      otaStateEl.textContent = !status.available
+        ? "no OTA partition in this build"
+        : status.state + " · " + formatBytes(status.offset) + " / " +
+          formatBytes(status.total) + " (" + pct + "%) · running " +
+          (status.running_partition || "?") + " · next boot " +
+          (status.partition || "?") + (status.error ? " · " + status.error : "");
+      if (!uploading) {
+        otaBarEl.style.width = pct + "%";
+        if (status.total) showProgress(status.offset, status.total);
+      }
+
+      const ble = status.ble || {};
+      bleStateEl.textContent = ble.enabled
+        ? (ble.connected ? "connected" : "advertising") + " as " + ble.name +
+          " · MTU " + ble.mtu
+        : "disabled (built without NimBLE)";
+      bleUuidsEl.textContent = "service " + ble.service_uuid +
+        " · control " + ble.control_uuid + " · data " + ble.data_uuid +
+        " · status " + ble.status_uuid;
+    }
+
+    async function refreshOta() {
+      if (uploading) return;
+      try {
+        renderOta(await otaStatus());
+      } catch (error) {
+        otaStateEl.textContent = "update status unavailable";
+      }
+    }
+
+    async function startUpload() {
+      if (uploading) return;
+      const file = otaFileEl.files[0];
+      if (!file) {
+        otaResultEl.textContent = "choose a firmware .bin first";
+        return;
+      }
+
+      uploading = true;
+      otaUploadEl.disabled = true;
+      otaAbortEl.disabled = true;
+      otaResultEl.textContent = "hashing " + file.name + "…";
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      try {
+        const hash = sha256Hex(new Uint8Array(await file.arrayBuffer()));
+        const status = await otaStatus();
+
+        if (file.size > status.capacity) {
+          throw new Error("image is larger than the " + formatBytes(status.capacity) + " slot");
+        }
+
+        let offset;
+        const same = status.state === "active" && status.total === file.size &&
+          status.sha256 === hash && status.offset > 0;
+        if (!otaRestartEl.checked && same) {
+          offset = status.offset;
+          otaResultEl.textContent = "resuming at " + formatBytes(offset);
+        } else {
+          const started = await postJson("/api/ota/begin", {
+            size: file.size,
+            sha256: hash,
+            restart: otaRestartEl.checked,
+          });
+          offset = started.offset;
+          otaResultEl.textContent = "uploading " + file.name + " to " +
+            (status.partition || "the inactive slot");
+        }
+
+        showProgress(offset, file.size);
+        let retries = 0;
+
+        while (offset < file.size) {
+          const end = Math.min(offset + 16384, file.size);
+          try {
+            const response = await fetch("/api/ota/chunk", {
+              method: "POST",
+              headers: { "X-OTA-Offset": String(offset) },
+              body: file.slice(offset, end),
+            });
+            const answer = await response.json()
+              .catch(() => ({ ok: false, error: "bad response" }));
+            if (!response.ok || !answer.ok) {
+              const error = new Error(answer.error || ("HTTP " + response.status));
+              error.offset = answer.offset;
+              error.status = response.status;
+              throw error;
+            }
+            if (answer.offset !== end) {
+              throw new Error("device acknowledged " + answer.offset + ", expected " + end);
+            }
+            offset = answer.offset;
+            retries = 0;
+            showProgress(offset, file.size);
+          } catch (error) {
+            // The device is the source of truth after a network drop: ask
+            // where it stopped and continue from there.
+            if (retries >= 5) throw error;
+            retries += 1;
+            otaResultEl.textContent =
+              "connection lost at " + formatBytes(offset) + ", reconnecting…";
+            await new Promise((resolve) => setTimeout(resolve, 600 * retries));
+            const latest = await otaStatus();
+            if (latest.state === "active" && latest.total === file.size &&
+                latest.sha256 === hash) {
+              offset = latest.offset;
+              showProgress(offset, file.size);
+            } else {
+              throw new Error("upload state lost: " + latest.state);
+            }
+          }
+        }
+
+        const done = await postJson("/api/ota/finish", {});
+        otaBarEl.style.width = "100%";
+        otaProgressEl.textContent =
+          formatBytes(done.total) + " / " + formatBytes(done.total) + " (100%)";
+        otaResultEl.textContent = "sha256 verified, next boot uses " +
+          done.partition + ".";
+        if (confirm("Firmware verified. Reboot into " + done.partition + " now?")) {
+          await control("reboot");
+        }
+      } catch (error) {
+        otaResultEl.textContent = "update stopped: " + error.message +
+          ". The device keeps the offset; press Upload / resume to continue.";
+      } finally {
+        uploading = false;
+        otaUploadEl.disabled = false;
+        otaAbortEl.disabled = false;
+        await refreshOta();
+      }
+    }
+
+    otaUploadEl.onclick = startUpload;
+    otaAbortEl.onclick = async () => {
+      if (!confirm("Discard the interrupted upload?")) return;
+      try {
+        await postJson("/api/ota/abort", {});
+        otaResultEl.textContent = "upload discarded";
+        otaProgressEl.textContent = "";
+        otaBarEl.style.width = "0%";
+      } catch (error) {
+        otaResultEl.textContent = "could not abort: " + error.message;
+      }
+      await refreshOta();
+    };
+
+    refreshOta();
+    setInterval(refreshOta, 5000);
 
     refreshStatus();
     setInterval(refreshStatus, 5000);
