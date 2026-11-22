@@ -410,6 +410,12 @@ void start() {
   xTaskCreate(&prober_task, "monitor", 8192, nullptr, 3, nullptr);
 }
 
+void request_probe() {
+  if (s_events != nullptr) {
+    xEventGroupSetBits(s_events, kConfigChangedBit);
+  }
+}
+
 Snapshot snapshot() { return copy_snapshot(); }
 
 Config config() { return copy_config(); }

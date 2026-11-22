@@ -5,6 +5,7 @@
 #include "cJSON.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "control/commands.hpp"
 #include "monitor/prober.hpp"
 #include "web/assets.hpp"
 
@@ -59,6 +60,69 @@ esp_err_t get_config(httpd_req_t *req) {
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Cache-Control", "no-store");
   return httpd_resp_send(req, json.c_str(), static_cast<ssize_t>(json.size()));
+}
+
+esp_err_t post_control(httpd_req_t *req) {
+  if (req->content_len == 0 || req->content_len > 1024) {
+    return send_message(req, false, "body is empty or too large",
+                        "400 Bad Request");
+  }
+
+  std::string body(req->content_len, '\0');
+  size_t received = 0;
+  while (received < body.size()) {
+    const int read = httpd_req_recv(req, &body[received], body.size() - received);
+    if (read <= 0) {
+      return send_message(req, false, "could not read body", "400 Bad Request");
+    }
+    received += static_cast<size_t>(read);
+  }
+
+  cJSON *root = cJSON_Parse(body.c_str());
+  if (root == nullptr) {
+    return send_message(req, false, "malformed json", "400 Bad Request");
+  }
+
+  const cJSON *action = cJSON_GetObjectItemCaseSensitive(root, "action");
+  if (!cJSON_IsString(action)) {
+    cJSON_Delete(root);
+    return send_message(req, false, "action is required", "400 Bad Request");
+  }
+
+  const std::string name = action->valuestring;
+  control::Command command;
+
+  if (name == "refresh") {
+    command.action = control::Action::Refresh;
+  } else if (name == "probe") {
+    command.action = control::Action::ProbeNow;
+  } else if (name == "reboot") {
+    command.action = control::Action::Reboot;
+  } else if (name == "page") {
+    const cJSON *page = cJSON_GetObjectItemCaseSensitive(root, "page");
+    if (!cJSON_IsString(page)) {
+      cJSON_Delete(root);
+      return send_message(req, false, "page is required", "400 Bad Request");
+    }
+    const std::string target = page->valuestring;
+    if (target != "monitor" && target != "status") {
+      cJSON_Delete(root);
+      return send_message(req, false, "unknown page", "400 Bad Request");
+    }
+    command.action = control::Action::ShowPage;
+    command.page = target;
+  } else {
+    cJSON_Delete(root);
+    return send_message(req, false, "unknown action", "400 Bad Request");
+  }
+
+  cJSON_Delete(root);
+  control::queue().post(command);
+  ESP_LOGI(TAG, "control: %s%s%s", name.c_str(),
+           command.action == control::Action::ShowPage ? " " : "",
+           command.action == control::Action::ShowPage ? command.page.c_str()
+                                                       : "");
+  return send_message(req, true, "", nullptr);
 }
 
 esp_err_t get_status(httpd_req_t *req) {
@@ -118,6 +182,8 @@ void start() {
       {.uri = "/api/config", .method = HTTP_POST, .handler = post_config,
        .user_ctx = nullptr},
       {.uri = "/api/status", .method = HTTP_GET, .handler = get_status,
+       .user_ctx = nullptr},
+      {.uri = "/api/control", .method = HTTP_POST, .handler = post_control,
        .user_ctx = nullptr},
   };
 

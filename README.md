@@ -183,9 +183,25 @@ The device serves a Tailwind page on port 80:
 | `GET /api/config` | current config as JSON |
 | `POST /api/config` | validate, store in NVS, re-probe immediately |
 | `GET /api/status` | live snapshot (latency, streaks, uptime) |
+| `POST /api/control` | `{"action": ...}` see below |
 
-The page is deliberately minimal: it lists targets, lets you add/remove rows
-and edit the interval. Design comes later.
+Control actions (the page has buttons for each):
+
+| action | effect |
+| --- | --- |
+| `{"action":"refresh"}` | force a full-screen repaint |
+| `{"action":"probe"}` | run a probe round now instead of waiting |
+| `{"action":"page","page":"monitor"}` | switch to the monitor page |
+| `{"action":"page","page":"status"}` | switch to the demo page |
+| `{"action":"reboot"}` | `esp_restart()` |
+
+The HTTP task never touches the UI directly: it posts to a single-slot queue
+(`src/control/`) that the main loop drains once per iteration, so a button press
+cannot race the frame buffer. The latest request wins.
+
+The page is deliberately minimal: it lists targets, lets you add/remove rows,
+edit the interval, shows the live summary (WiFi, up count, uptime) and has the
+control buttons. Design comes later.
 
 Tailwind v4 lives in `web/`:
 
@@ -220,7 +236,7 @@ device does a full refresh.
 ## Testing without the panel
 
 ```sh
-pio test -e native      # 100 Unity tests, no hardware
+pio test -e native      # 107 Unity tests, no hardware
 tools/preview.sh        # real pages + the rotated panel frame, PNG + ASCII
 python3 tools/check_sources.py   # component sources match src/CMakeLists.txt
 ```
@@ -228,7 +244,8 @@ python3 tools/check_sources.py   # component sources match src/CMakeLists.txt
 The preview writes `preview-monitor.png` (logical 480x648),
 `preview-panel.png` (what the panel receives) and the demo pages.
 
-The suite covers geometry/anchor math, rect merging, parameter typing and
+The suite covers the control queue, geometry/anchor math, rect merging,
+parameter typing and
 schema validation, UTF-8 (including malformed, truncated, overlong and
 embedded-NUL input and `Æ Ø Å æ ø å`), the 1 bpp canvas (unaligned and
 partly-used edge bytes, clipping, invert strokes, multi-byte glyphs, hashing,

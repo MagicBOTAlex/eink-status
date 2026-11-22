@@ -34,6 +34,27 @@
     </div>
   </form>
 
+  <section class="mt-10 border-t border-neutral-300 pt-6">
+    <h2 class="text-lg font-semibold">Control</h2>
+    <p class="mt-1 text-sm text-neutral-600">
+      Immediate actions. The panel also redraws on every probe.
+    </p>
+    <p id="live" class="mt-3 text-sm text-neutral-700">loading status…</p>
+    <div class="mt-3 flex flex-wrap gap-2">
+      <button type="button" data-action="refresh"
+              class="border border-neutral-300 px-3 py-1 text-sm">Refresh panel</button>
+      <button type="button" data-action="probe"
+              class="border border-neutral-300 px-3 py-1 text-sm">Probe now</button>
+      <button type="button" data-action="page" data-page="monitor"
+              class="border border-neutral-300 px-3 py-1 text-sm">Show monitor</button>
+      <button type="button" data-action="page" data-page="status"
+              class="border border-neutral-300 px-3 py-1 text-sm">Show success page</button>
+      <button type="button" data-action="reboot"
+              class="border border-red-700 px-3 py-1 text-sm text-red-700">Reboot</button>
+    </div>
+    <p id="control-result" class="mt-2 text-sm text-neutral-600"></p>
+  </section>
+
   <template id="row">
     <div class="flex flex-wrap items-center gap-2 border border-neutral-300 bg-white p-2">
       <select data-field="kind" class="border border-neutral-300 px-1 py-1 text-sm">
@@ -114,6 +135,54 @@
         resultEl.textContent = "could not save: " + error;
       }
     };
+
+    const liveEl = document.getElementById("live");
+    const controlResult = document.getElementById("control-result");
+
+    function formatDuration(seconds) {
+      const total = Math.max(0, Math.floor(seconds));
+      if (total < 60) return total + "s";
+      if (total < 3600) return Math.floor(total / 60) + "m";
+      return Math.floor(total / 3600) + "h " + (Math.floor(total / 60) % 60) + "m";
+    }
+
+    async function refreshStatus() {
+      try {
+        const status = await (await fetch("/api/status")).json();
+        const targets = status.known_count
+          ? status.up_count + "/" + status.known_count + " up"
+          : "starting";
+        liveEl.textContent =
+          (status.wifi_connected ? "wifi " + status.ip : "no wifi") +
+          " · " + targets + " · uptime " + formatDuration(status.uptime_s);
+      } catch (error) {
+        liveEl.textContent = "status unavailable";
+      }
+    }
+
+    async function control(action, page) {
+      if (action === "reboot" && !confirm("Reboot the panel?")) return;
+      const payload = page ? { action, page } : { action };
+      try {
+        const response = await fetch("/api/control", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const answer = await response.json();
+        controlResult.textContent = answer.ok ? "ok" : "error: " + answer.error;
+      } catch (error) {
+        controlResult.textContent = "could not send: " + error;
+      }
+      setTimeout(refreshStatus, 1000);
+    }
+
+    document.querySelectorAll("[data-action]").forEach((button) => {
+      button.onclick = () => control(button.dataset.action, button.dataset.page);
+    });
+
+    refreshStatus();
+    setInterval(refreshStatus, 5000);
 
     load();
   </script>

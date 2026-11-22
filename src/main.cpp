@@ -4,11 +4,13 @@
 #include <vector>
 
 #include "esp_heap_caps.h"
+#include "esp_system.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "control/commands.hpp"
 #include "epd.hpp"
 #include "monitor/prober.hpp"
 #include "panel_plan.hpp"
@@ -182,6 +184,31 @@ extern "C" void app_main() {
 
   for (;;) {
     const uint32_t now = now_ms();
+
+    const control::Command command = control::queue().take();
+    if (command.action != control::Action::None) {
+      switch (command.action) {
+      case control::Action::Refresh:
+        need_full = true;
+        next_full_attempt = 0;
+        break;
+      case control::Action::ProbeNow:
+        monitor::request_probe();
+        break;
+      case control::Action::Reboot:
+        ESP_LOGW(TAG, "reboot requested from the web UI");
+        esp_restart();
+        break;
+      case control::Action::ShowPage:
+        if (!g_app.show_page(command.page)) {
+          ESP_LOGW(TAG, "no such page: %s", command.page.c_str());
+        }
+        break;
+      case control::Action::None:
+        break;
+      }
+    }
+
     g_app.tick(now);
 
     if (!g_app.needs_present() && !need_full) {

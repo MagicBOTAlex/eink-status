@@ -11,6 +11,7 @@ set(UI_SRCS
     "ui/page.cpp"
     "ui/param.cpp"
     "ui/rotation.cpp"
+    "control/commands.cpp"
     "ui/types.cpp"
     "screens/status_page.cpp"
     "screens/monitor_page.cpp"

@@ -18,6 +18,10 @@ Config config();
 std::string config_json();
 std::string snapshot_json();
 
+// Wakes the probe task so it runs a round now instead of waiting out the
+// interval. Safe to call from the HTTP task.
+void request_probe();
+
 // Validates, stores in NVS and wakes the prober to re-probe immediately.
 // Returns false and fills `error` when the configuration is rejected.
 bool set_config(const Config &config, std::string &error);
