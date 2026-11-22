@@ -166,7 +166,7 @@ void test_status_change_repaints_one_row(void) {
   // status text, uptime), merged into one rect. Row 0 is untouched.
   TEST_ASSERT_EQUAL_size_t(2, dirty.size());
   TEST_ASSERT_TRUE(dirty[0] == (ui::Rect{268, 8, 200, 30}));
-  TEST_ASSERT_TRUE(dirty[1] == (ui::Rect{176, 116, 292, 68}));
+  TEST_ASSERT_TRUE(dirty[1] == (ui::Rect{186, 76, 282, 36}));
   TEST_ASSERT_EQUAL_STRING("2/2 up", h.page->summary_label().text().c_str());
 }
 
@@ -182,7 +182,7 @@ void test_latency_update_repaints_only_its_row(void) {
 
   // Only the latency cell repaints: the pixel diff does the work, not the row.
   TEST_ASSERT_EQUAL_size_t(1, dirty.size());
-  TEST_ASSERT_TRUE(dirty[0] == (ui::Rect{176, 48, 94, 68}));
+  TEST_ASSERT_TRUE(dirty[0] == (ui::Rect{186, 40, 90, 36}));
 }
 
 void test_page_validates_cleanly(void) {

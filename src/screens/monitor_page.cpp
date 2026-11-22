@@ -8,23 +8,23 @@ namespace app {
 namespace {
 
 // 480x648 logical layout (the panel is rotated 90 degrees on the way out).
-// Seven 68 px rows fit between the two rules.
+// Fourteen 36 px rows of 24 px type fit between the two rules.
 constexpr int kMargin = 12;
 constexpr int kHeaderY = 8;
-constexpr int kRuleTop = 40;
-constexpr int kRowTop = 48;
-constexpr int kRowHeight = 68;
-constexpr int kNameW = 160;
-constexpr int kLatencyX = 176;
-constexpr int kLatencyW = 94;
-constexpr int kStatusX = 278;
-constexpr int kStatusW = 86;
-constexpr int kStatusH = 44;
-constexpr int kUptimeX = 372;
-constexpr int kUptimeW = 96;
-constexpr int kRuleBottom = 528;
-constexpr int kFooter1Y = 536;
-constexpr int kFooter2Y = 568;
+constexpr int kRuleTop = 36;
+constexpr int kRowTop = 40;
+constexpr int kRowHeight = 36;
+constexpr int kNameW = 170;
+constexpr int kLatencyX = 186;
+constexpr int kLatencyW = 90;
+constexpr int kStatusX = 282;
+constexpr int kStatusW = 60;
+constexpr int kStatusH = 30;
+constexpr int kUptimeX = 348;
+constexpr int kUptimeW = 120;
+constexpr int kRuleBottom = 548;
+constexpr int kFooter1Y = 556;
+constexpr int kFooter2Y = 588;
 
 ui::ParamSet text_params(const char *text, const ui::Font &font, int x, int y,
                          int w, int h) {
@@ -74,12 +74,12 @@ MonitorPage::MonitorPage(SnapshotSource source)
 
     {
       ui::ParamSet params =
-          text_params("-", theme::row_font(), kMargin, y, kNameW, kRowHeight);
+          text_params("-", theme::label_font(), kMargin, y, kNameW, kRowHeight);
       row.name = &add<ui::Label>("name", params);
     }
     {
       ui::ParamSet params =
-          text_params("--", theme::row_font(), kLatencyX, y, kLatencyW,
+          text_params("--", theme::label_font(), kLatencyX, y, kLatencyW,
                       kRowHeight);
       params.set(ui::Label::kHAlign, ui::Param(ui::HAlign::Right));
       row.latency = &add<ui::Label>("latency", params);
@@ -110,7 +110,7 @@ MonitorPage::MonitorPage(SnapshotSource source)
     }
     {
       ui::ParamSet params =
-          text_params("--", theme::row_font(), kUptimeX, y, kUptimeW,
+          text_params("--", theme::label_font(), kUptimeX, y, kUptimeW,
                       kRowHeight);
       params.set(ui::Label::kHAlign, ui::Param(ui::HAlign::Right));
       row.uptime = &add<ui::Label>("uptime", params);

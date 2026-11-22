@@ -10,6 +10,10 @@
 // agree on what is acceptable.
 namespace monitor {
 
+// Bumped when the default target list changes; a stored config with an older
+// version is replaced by the new defaults instead of pinning the old list.
+inline constexpr int kConfigVersion = 2;
+
 inline constexpr int kMinProbeSeconds = 10;
 inline constexpr int kMaxProbeSeconds = 3600;
 inline constexpr size_t kMaxLabelLength = 12;
@@ -26,6 +30,7 @@ struct Config {
   TargetConfig targets[kMaxTargets];
   int count = 0;
   int probe_seconds = 30;
+  int version = kConfigVersion;
 };
 
 // The bench defaults, including https://deprived.dev/.

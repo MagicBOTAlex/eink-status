@@ -43,6 +43,7 @@ bool valid_ipv4(const std::string &address) {
 Config default_config() {
   Config config;
   config.probe_seconds = 30;
+  config.version = kConfigVersion;
 
   const struct {
     Kind kind;
@@ -54,6 +55,14 @@ Config default_config() {
       {Kind::Http, "akupunktur", "https://www.akupunktur-herlev.dk/", false},
       {Kind::Http, "ha", "https://ha.deprived.dev/", false},
       {Kind::Http, "deprived", "https://deprived.dev/", false},
+      {Kind::Http, "immich", "https://immich.deprived.dev/", false},
+      // Jelly stack.
+      {Kind::Http, "qbit", "http://qbit.deprived.internal/", false},
+      {Kind::Http, "theoriarr", "http://theoriarr.deprived.internal/", false},
+      {Kind::Http, "prowlarr", "http://prowlarr.deprived.internal/", false},
+      {Kind::Http, "seer", "https://seer.deprived.dev/", false},
+      {Kind::Http, "jelly", "https://jelly.deprived.dev/", false},
+      // LAN.
       {Kind::Ping, "botserver", "192.168.50.82", false},
       {Kind::Ping, "metal", "192.168.50.59", false},
       {Kind::Ping, "botmain", "192.168.50.58", false},

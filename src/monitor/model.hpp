@@ -11,8 +11,8 @@ namespace monitor {
 
 enum class Kind : uint8_t { Http, Ping };
 
-// Fits the 648x480 table (seven 42 px rows).
-inline constexpr int kMaxTargets = 7;
+// Fits the 480x648 table (fourteen 36 px rows at 24 px type).
+inline constexpr int kMaxTargets = 14;
 
 struct TargetStatus {
   std::string label;

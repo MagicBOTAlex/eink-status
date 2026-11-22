@@ -38,14 +38,14 @@ app::WifiInfo wifi() {
 
 monitor::Snapshot bench_snapshot(bool down) {
   monitor::Snapshot snap;
-  snap.count = monitor::kMaxTargets;
+  snap.count = 13;
   snap.probe_seconds = 30;
   snap.wifi_connected = true;
   snap.connected_since_ms = 100000;
   std::snprintf(snap.ip, sizeof(snap.ip), "192.168.50.7");
   snap.checked_ms = 3600000;
-  snap.known_count = monitor::kMaxTargets;
-  snap.up_count = down ? monitor::kMaxTargets - 1 : monitor::kMaxTargets;
+  snap.known_count = snap.count;
+  snap.up_count = down ? snap.count - 1 : snap.count;
 
   const struct {
     const char *label;
@@ -57,6 +57,12 @@ monitor::Snapshot bench_snapshot(bool down) {
       {"akupunktur", monitor::Kind::Http, 212, 900000},
       {"ha", monitor::Kind::Http, 6, 3600000},
       {"deprived", monitor::Kind::Http, 104, 1800000},
+      {"immich", monitor::Kind::Http, 96, 700000},
+      {"qbit", monitor::Kind::Http, 4, 3600000},
+      {"theoriarr", monitor::Kind::Http, 5, 3600000},
+      {"prowlarr", monitor::Kind::Http, 4, 3600000},
+      {"seer", monitor::Kind::Http, 87, 3600000},
+      {"jelly", monitor::Kind::Http, 91, 3600000},
       {"botserver", monitor::Kind::Ping, 2, 3600000},
       {"metal", monitor::Kind::Ping, 1, 3600000},
       {"botmain", monitor::Kind::Ping, 1, 3600000},

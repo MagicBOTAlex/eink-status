@@ -24,11 +24,14 @@ int index_of(const monitor::Config &config, const std::string &label) {
 void test_default_config_covers_the_bench(void) {
   monitor::Config config = monitor::default_config();
 
-  TEST_ASSERT_EQUAL_INT(monitor::kMaxTargets, config.count);
+  TEST_ASSERT_EQUAL_INT(13, config.count);
   TEST_ASSERT_EQUAL_INT(30, config.probe_seconds);
+  TEST_ASSERT_EQUAL_INT(monitor::kConfigVersion, config.version);
 
-  const char *labels[] = {"webui", "akupunktur", "ha", "deprived",
-                          "botserver", "metal", "botmain"};
+  const char *labels[] = {"webui", "akupunktur", "ha",  "deprived",
+                          "immich", "qbit", "theoriarr", "prowlarr",
+                          "seer",   "jelly", "botserver", "metal",
+                          "botmain"};
   for (const char *label : labels) {
     TEST_ASSERT_TRUE(index_of(config, label) >= 0);
   }
@@ -44,6 +47,16 @@ void test_default_config_covers_the_bench(void) {
   const int botserver = index_of(config, "botserver");
   TEST_ASSERT_EQUAL_INT((int)monitor::Kind::Ping,
                         (int)config.targets[botserver].kind);
+
+  const int qbit = index_of(config, "qbit");
+  TEST_ASSERT_EQUAL_STRING("http://qbit.deprived.internal/",
+                           config.targets[qbit].address.c_str());
+  const int jelly = index_of(config, "jelly");
+  TEST_ASSERT_EQUAL_STRING("https://jelly.deprived.dev/",
+                           config.targets[jelly].address.c_str());
+  const int immich = index_of(config, "immich");
+  TEST_ASSERT_EQUAL_STRING("https://immich.deprived.dev/",
+                           config.targets[immich].address.c_str());
 
   std::string error;
   TEST_ASSERT_TRUE(monitor::validate_config(config, error));
@@ -77,7 +90,7 @@ void test_validate_rejects_bad_configs(void) {
   TEST_ASSERT_TRUE(error.find("duplicate") != std::string::npos);
 
   monitor::Config bad_ping = monitor::default_config();
-  bad_ping.targets[4].address = "192.168.50.999";
+  bad_ping.targets[index_of(bad_ping, "botserver")].address = "192.168.50.999";
   TEST_ASSERT_FALSE(monitor::validate_config(bad_ping, error));
   TEST_ASSERT_TRUE(error.find("not valid for ping") != std::string::npos);
 
@@ -102,9 +115,10 @@ void test_validate_clamps_interval_and_normalises(void) {
 
   // expect_ok_body is meaningless for ICMP and gets cleared.
   monitor::Config ping = monitor::default_config();
-  ping.targets[4].expect_ok_body = true;
+  const int botserver = index_of(ping, "botserver");
+  ping.targets[botserver].expect_ok_body = true;
   TEST_ASSERT_TRUE(monitor::validate_config(ping, error));
-  TEST_ASSERT_FALSE(ping.targets[4].expect_ok_body);
+  TEST_ASSERT_FALSE(ping.targets[botserver].expect_ok_body);
 }
 
 void test_valid_address(void) {

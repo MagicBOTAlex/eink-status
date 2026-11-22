@@ -74,6 +74,9 @@ bool config_from_json(const char *text, Config &out) {
   bool ok = true;
   out = Config{};
 
+  const cJSON *version = cJSON_GetObjectItemCaseSensitive(root, "version");
+  out.version = cJSON_IsNumber(version) ? version->valueint : 0;
+
   const cJSON *seconds = cJSON_GetObjectItemCaseSensitive(root, "probe_seconds");
   out.probe_seconds = cJSON_IsNumber(seconds) ? seconds->valueint : 30;
 
@@ -98,6 +101,7 @@ bool config_from_json(const char *text, Config &out) {
 
 std::string config_to_json(const Config &config) {
   cJSON *root = cJSON_CreateObject();
+  cJSON_AddNumberToObject(root, "version", config.version);
   cJSON_AddNumberToObject(root, "probe_seconds", config.probe_seconds);
   cJSON *targets = cJSON_AddArrayToObject(root, "targets");
   for (int i = 0; i < config.count; ++i) {
@@ -159,6 +163,11 @@ bool load_config(Config &out) {
   }
   if (!validate_config(out, error)) {
     ESP_LOGW(TAG, "stored config is invalid (%s); using defaults", error.c_str());
+    return false;
+  }
+  if (out.version != kConfigVersion) {
+    ESP_LOGI(TAG, "stored config is version %d (want %d); using new defaults",
+             out.version, kConfigVersion);
     return false;
   }
   return true;
